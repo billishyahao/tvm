@@ -1085,7 +1085,7 @@ class MatMul(OnnxOpConverter):
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
         assert len(inputs) == 2, "MatMul op take 2 inputs, {} given".format(len(inputs))
-        print("hebi-dbg: matmul impl_v1 enter")
+        # print("hebi-dbg: matmul impl_v1 enter")
         # Need to check input shape as batch matmul must be supported.
         return matmul_out_dtype(inputs, out_dtype=infer_type(inputs[0]).checked_type.dtype)
 
@@ -5367,7 +5367,7 @@ class GraphProto:
         """Nodes are stored as directed acyclic graph."""
         for node in graph.node:
             op_name = node.op_type
-            print("hebi-dbg: op_name: " + op_name)
+            # print("hebi-dbg: op_name: " + op_name)
             attr = self._parse_attr(node.attribute)
             # Create and populate input list.
             inputs = onnx_input()

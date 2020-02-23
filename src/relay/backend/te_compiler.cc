@@ -712,9 +712,9 @@ class LowerTensorExprMutator : public DeviceAwareExprMutator {
 
     // Look for (possibly indirect) calls to primitives.
 
-    std::cout << "hebi-dbg: DeviceAwareVisitExpr_ enter \n";
+    // std::cout << "hebi-dbg: DeviceAwareVisitExpr_ enter \n";
     BaseFunc primitive_func = ResolveToPrimitive(call_node->op);
-    std::cout << "hebi-dbg: done resolve to primitive\n";
+    // std::cout << "hebi-dbg: done resolve to primitive\n";
     if (!primitive_func.defined()) {
       // Not a call to a primitive function we need to rewrite.
       if (const auto* function_node = call_node->op.as<FunctionNode>()) {
@@ -784,7 +784,7 @@ class LowerTensorExprMutator : public DeviceAwareExprMutator {
     // Lower the primitive function for that target.
     Function function = Downcast<Function>(primitive_func);
     ICHECK(call_node->type_args.empty()) << "lowered functions cannot be polymorphic";
-    std::cout << "hebi-dbg: DeviceAwareVisitExpr_ exit \n";
+    // std::cout << "hebi-dbg: DeviceAwareVisitExpr_ exit \n";
     return MakeLoweredCall(function, std::move(new_args), call_node->span, target);
   }
 
@@ -1012,7 +1012,7 @@ void UpdateFunctionMetadata(BaseFunc func,
       func->GetAttr<Map<GlobalVar, tir::PrimFunc>>("prim_funcs");
   CHECK(prim_fns) << "primitive functions not set on Relay function by TECompiler.";
 
-  std::cout << "hebi-dbg: UpdateFunctionMetadata enter \n";
+  // std::cout << "hebi-dbg: UpdateFunctionMetadata enter \n";
 
   Optional<GlobalVar> prim_fn_var = func->GetAttr<GlobalVar>("prim_fn_var");
   CHECK(prim_fn_var) << "prim_fn_var must be set on Relay functions by TECompiler.";

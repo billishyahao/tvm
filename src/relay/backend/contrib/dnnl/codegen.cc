@@ -490,7 +490,7 @@ class DNNLJSONSerializer : public backend::contrib::JSONSerializer {
 
   std::vector<JSONGraphNodeEntry> VisitExpr_(const CallNode* cn) override {
 
-    std::cout << "hebi-dbg: enter dnnl json serializer visit \n";
+    // std::cout << "hebi-dbg: enter dnnl json serializer visit \n";
 
     Expr expr = GetRef<Expr>(cn);
     std::string name;
@@ -524,23 +524,23 @@ class DNNLJSONSerializer : public backend::contrib::JSONSerializer {
         ICHECK(call->op.as<OpNode>()) << "Not op node";
       } else if (name.find("dnnl.dense") != std::string::npos) {
         std::vector<std::string> op_list = ParsingOpList(name);
-        std::cout << "hebi-dbg: name (" << name << ")";
-        std::cout << "hebi-dbg: op_list (";
-        for (auto s: op_list) {
-          std::cout << s << ", ";
-        }
-        std::cout << ")";
+        // std::cout << "hebi-dbg: name (" << name << ")";
+        // std::cout << "hebi-dbg: op_list (";
+        // for (auto s: op_list) {
+        //   std::cout << s << ", ";
+        // }
+        // std::cout << ")";
         //TODO: XXX hebi why 4 here 
         call = GetRootCall(fn->body.as<CallNode>(), op_list.size() - 1, op_list);
         ICHECK(call->op.as<OpNode>()) << "Not op node";
       } else if (name.find("dnnl.packeddense") != std::string::npos) {
         std::vector<std::string> op_list = ParsingOpList(name);
-        std::cout << "hebi-dbg: name (" << name << ")";
-        std::cout << "hebi-dbg: op_list (";
-        for (auto s: op_list) {
-          std::cout << s << ", ";
-        }
-        std::cout << ")";
+        // std::cout << "hebi-dbg: name (" << name << ")";
+        // std::cout << "hebi-dbg: op_list (";
+        // for (auto s: op_list) {
+        //   std::cout << s << ", ";
+        // }
+        // std::cout << ")";
         //TODO: XXX hebi why 4 here 
         call = GetRootCall(fn->body.as<CallNode>(), op_list.size() - 1, op_list);
         ICHECK(call->op.as<OpNode>()) << "Not op node";

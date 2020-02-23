@@ -10,7 +10,7 @@ from tvm.relay.build_module import bind_params_by_name
 from tvm import relay, auto_scheduler
 import os
 
-from tvm.relay.op.contrib.dnnl import pattern_table, rewrite_layer_norm, rewrite_gelu_reshape_last, rewrite_dense_bias_reshape_last
+from tvm.relay.op.contrib.dnnl import pattern_table
 
 from tvm.relay.build_module import bind_params_by_name
 from tvm.relay.testing.temp_op_attr import TempOpAttr
@@ -179,6 +179,8 @@ def partition_for_dnnl(mod, params=None, alter_layout=True):
             )
             with tvm.transform.PassContext(opt_level=3):
                 mod = seq(mod)
+
+
     if alter_layout:
         with TempOpAttr("nn.conv1d", "FTVMAlterOpLayout", dnnl.alter_conv):
             with TempOpAttr("nn.conv2d", "FTVMAlterOpLayout", dnnl.alter_conv):
@@ -200,10 +202,12 @@ def partition_for_dnnl(mod, params=None, alter_layout=True):
                             )
                             with tvm.transform.PassContext(opt_level=3):
                                 mod = alter_layout_seq(mod)
-    
+
     mod = dnnl.rewrite_layer_norm(mod)
-    mod = dnnl.rewrite_gelu_reshape_last(mod, pack_wei=True)
+    mod = dnnl.rewrite_dense_bias_gelu_reshape_last(mod, pack_wei=True)
+    ###### mod = dnnl.rewrite_dense_bias_gelu_reshape_last_v2(mod, tuned_batch_size=1)
     mod = dnnl.rewrite_dense_bias_reshape_last(mod, pack_wei=True)
+    mod = dnnl.rewrite_dense_to_pack(mod)
 
     byoc_seq = tvm.transform.Sequential(
         [
@@ -218,6 +222,9 @@ def partition_for_dnnl(mod, params=None, alter_layout=True):
     with tvm.transform.PassContext(opt_level=3):
         mod = byoc_seq(mod)
         # mod = dnnl.prune_dnnl_subgraphs(mod)
+
+    print("PrintIR:")
+    print(mod)
     return mod
 
 
@@ -329,13 +336,15 @@ def main():
     ## warmup loop
     for i in range(args.warmup):
         rt_model.run()
+
+    print("warm up done.")
     
     if args.profile:
         return
     
     print("Evaluate inference time cost...")
     #ftimer = rt_model.benchmark(dev,func_name='run', repeat=args.nloop, min_repeat_ms=500)
-    ftimer = rt_model.module.time_evaluator('run', dev, repeat=args.nloop, min_repeat_ms=500)
+    ftimer = rt_model.module.time_evaluator('run', dev, repeat=args.nloop)
     prof_res = np.array(ftimer().results) * 1e3  # convert to millisecond
     print("Mean inference time (std dev): %.2f ms (%.2f ms)" % (np.mean(prof_res), np.std(prof_res)))
 

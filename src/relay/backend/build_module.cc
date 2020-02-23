@@ -402,7 +402,7 @@ class RelayBuildModule : public runtime::ModuleNode {
    * \param params The parameters.
    */
   void BuildRelay(IRModule relay_module, const String& mod_name) {
-    std::cout << "hebi-dbg BuildRelay enter \n";
+    // std::cout << "hebi-dbg BuildRelay enter \n";
     // Relay IRModule -> IRModule optimizations.
     IRModule module = WithAttrs(
         relay_module, {{tvm::attr::kExecutor, executor_}, {tvm::attr::kRuntime, runtime_}});

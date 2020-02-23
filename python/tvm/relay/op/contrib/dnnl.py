@@ -32,7 +32,9 @@ it is supported. For example:
 - The other way is to implement the function by themselves to
 check the attributes of the op and decide if it should be offloaded to DNNL.
 """
+from hashlib import new
 import logging
+from torch import int
 
 import tvm.ir
 from tvm import relay
@@ -104,6 +106,7 @@ _register_external_op_helper("nn.softmax")
 #_register_external_op_helper("multiply")
 ###
 _register_external_op_helper("nn.layer_norm")
+_register_external_op_helper("nn.contrib_dense_pack")
 ####
 
 
@@ -460,7 +463,7 @@ def tag2layout(input_data, is_weight=False, conv_type="Conv1D"):
     if "Dense" in conv_type:    
         # post process for dense layout 
         # NC16c64n => NC64n16c
-        print("hebi-dbg: pattern res: ", res)
+        # print("hebi-dbg: pattern res: ", res)
         regexN = '\d+n'
         regexC = '\d+c'
 
@@ -565,8 +568,8 @@ def alter_conv_transpose(attrs, inputs, tinfos, out_type):
 def alter_dense(attrs, inputs, tinfos, out_type):
     """The dense's layout auto-query func for dnnl."""
 
-    print("len(inputs):", len(inputs))
-    print(type(inputs))
+    # print("len(inputs):", len(inputs))
+    # print(type(inputs))
 
     data, weight = inputs
 
@@ -577,12 +580,12 @@ def alter_dense(attrs, inputs, tinfos, out_type):
     weight_shape = ",".join(weight_shape_list)
     out_shape = ",".join(out_shape_list)
 
-    print("data_shape: ", data_shape)
-    print("weight_shape: ", weight_shape)
-    print("out_shape: ", out_shape)
+    # print("data_shape: ", data_shape)
+    # print("weight_shape: ", weight_shape)
+    # print("out_shape: ", out_shape)
 
-    print("hebi-dbg: type(attrs):", type(attrs))
-    print("hebi-dbg: attrs:", attrs.keys())
+    # print("hebi-dbg: type(attrs):", type(attrs))
+    # print("hebi-dbg: attrs:", attrs.keys())
 
     res = get_optimal_layout_for_dense(
         data_shape,
@@ -590,18 +593,17 @@ def alter_dense(attrs, inputs, tinfos, out_type):
         out_shape
     )
 
-    print(res)
+    # print(res)
     src_df, weight_df, dst_df = res.split(",")
    
     new_attrs = {}
     new_attrs["weight_layout"] = tag2layout(weight_df, is_weight=True, conv_type="Dense")
     
 
-    print(new_attrs)
+    # print(new_attrs)
     weight_transform = relay.layout_transform(weight, "NC", dst_layout=new_attrs["weight_layout"])
-    relay.nn.contrib_dense_pack(data, weight_transform, weight_layout=new_attrs["weight_layout"],
+    return relay.nn.contrib_dense_pack(data, weight_transform, weight_layout=new_attrs["weight_layout"],
                                        units=None, out_dtype=out_type.dtype)
-    return relay.nn.dense(data, weight_transform, units=None, out_dtype=out_type.dtype)
 
 
 class IsComputeIntensiveGraph(ExprVisitor):
@@ -623,6 +625,7 @@ class IsComputeIntensiveGraph(ExprVisitor):
                 "nn.conv3d",
                 "nn.conv3d_transpose",
                 "nn.dense",
+                "nn.contrib_dense_pack",
             ]
         )
         if isinstance(call.op, tvm.tir.op.Op):
@@ -789,7 +792,7 @@ class DenseReshapeBiasGeluRewrite(DFPatternCallback):
                 for k in expr.attrs.keys():
                     new_attrs[k] = expr.attrs[k]
                 self.attr_map["nn.dense"] = new_attrs
-            print(self.attr_map)
+            # print(self.attr_map)
         
         _analysis.post_order_visit(pre, visit_func)
 
@@ -804,8 +807,8 @@ class DenseReshapeBiasGeluRewrite(DFPatternCallback):
         const2 = node_map[self.const2][0]
         const3 = node_map[self.const3][0]
 
-        print("type weight = ", type(weight))
-        print("weight = ", get_shape(weight))
+        # print("type weight = ", type(weight))
+        # print("weight = ", get_shape(weight))
         
         if self.pack_wei:
             weight_shape_list = [str(x) for x in get_shape(weight)]
@@ -821,14 +824,14 @@ class DenseReshapeBiasGeluRewrite(DFPatternCallback):
                 out_shape
             )
 
-            print("DenseReshapeBiasGeluRewrite: res: ", res)
+            # print("DenseReshapeBiasGeluRewrite: res: ", res)
             src_df, weight_df, dst_df = res.split(",")
         
             new_attrs = {}
             reco_weight_layout = tag2layout(weight_df, is_weight=True, conv_type="Dense")
             
 
-            print("DenseReshapeBiasGeluRewrite reco_weight_layout = ", reco_weight_layout)
+            # print("DenseReshapeBiasGeluRewrite reco_weight_layout = ", reco_weight_layout)
             weight_transform = relay.layout_transform(weight, "NC", dst_layout=reco_weight_layout)
             # weight_transform = relay.layout_transform(weight, "NC", dst_layout="NC64n16c")
         
@@ -856,7 +859,7 @@ class DenseReshapeBiasGeluRewrite(DFPatternCallback):
 '''
 
 
-def rewrite_gelu_reshape_last(mod, pack_wei=False):
+def rewrite_dense_bias_gelu_reshape_last(mod, pack_wei=False):
     """Rewrite the input graph to replace non maximum surpression
     in torchvision that does not take class id into account with the one
     that avoids IOU tests between different classes.
@@ -897,7 +900,7 @@ class DenseReshapeBiasRewrite(DFPatternCallback):
                 for k in expr.attrs.keys():
                     new_attrs[k] = expr.attrs[k]
                 self.attr_map["nn.dense"] = new_attrs
-            print(self.attr_map)
+            # print(self.attr_map)
         
         _analysis.post_order_visit(pre, visit_func)
 
@@ -923,18 +926,18 @@ class DenseReshapeBiasRewrite(DFPatternCallback):
                 out_shape
             )
 
-            print("DenseReshapeBiasRewrite: res ", res)
+            # print("DenseReshapeBiasRewrite: res ", res)
             src_df, weight_df, dst_df = res.split(",")
         
             new_attrs = {}
             reco_weight_layout = tag2layout(weight_df, is_weight=True, conv_type="Dense")
             
 
-            print("DenseReshapeBiasRewrite reco_weight_layout = ", reco_weight_layout)
+            # print("DenseReshapeBiasRewrite reco_weight_layout = ", reco_weight_layout)
             weight_transform = relay.layout_transform(weight, "NC", dst_layout=reco_weight_layout)
             #weight_transform = relay.layout_transform(weight, "NC", dst_layout="NC64n16c")
 
-            den = relay.op.nn.contrib_dense_pack(data, weight_transform, weight_layout="NC", 
+            den = relay.op.nn.contrib_dense_pack(data, weight_transform, weight_layout=reco_weight_layout, 
                     units=None, out_dtype=self.attr_map["nn.dense"]["out_dtype"] if 'out_dtype' in self.attr_map['nn.dense'] else "")
         else:
             den = relay.op.nn.dense(data, weight)
@@ -955,3 +958,289 @@ def rewrite_dense_bias_reshape_last(mod, pack_wei=False):
     """
     mod["main"] = rewrite(DenseReshapeBiasRewrite(pack_wei), mod["main"])
     return mod
+
+
+class PackDenseRewrite(DFPatternCallback):
+    """A callback to rewrite gelu."""
+
+    def __init__(self):
+        super(PackDenseRewrite, self).__init__()
+        logger.warning("hebi-dbg: PackDenseRewrite 1")
+        self.data = wildcard()
+        self.weight = wildcard()
+        
+        self.attr_map = {}
+        
+        den = is_op("nn.dense")(self.data, self.weight)
+        self.pattern = den
+        logger.warning("hebi-dbg: PackDenseRewrite settled")
+
+    def get_attr(self, pre):
+        def visit_func(expr):
+            if isinstance(expr, _expr.Call) and expr.op == relay.op.get("nn.dense"):
+                new_attrs = {}
+                for k in expr.attrs.keys():
+                    new_attrs[k] = expr.attrs[k]
+                self.attr_map["nn.dense"] = new_attrs
+            # print(self.attr_map)
+        
+        _analysis.post_order_visit(pre, visit_func)
+
+    def callback(self, pre, post, node_map):
+        logger.warning("hebi-dbg: PackDenseRewrite rewriter")
+        self.get_attr(pre)
+
+        data = node_map[self.data][0]
+        weight = node_map[self.weight][0]
+        
+        weight_shape_list = [str(x) for x in get_shape(weight)]
+        data_shape_list = [str(x) for x in get_shape(data)]
+
+        data_shape = ",".join(data_shape_list)
+        weight_shape = ",".join(weight_shape_list)
+        out_shape = ",".join([data_shape_list[0], weight_shape_list[0]])
+        
+        res = get_optimal_layout_for_dense(
+            data_shape,
+            weight_shape,
+            out_shape
+        )
+
+        # print("DenseReshapeBiasRewrite: res ", res)
+        src_df, weight_df, dst_df = res.split(",")
+    
+        reco_weight_layout = tag2layout(weight_df, is_weight=True, conv_type="Dense")
+        
+
+        # print("DenseReshapeBiasRewrite reco_weight_layout = ", reco_weight_layout)
+        weight_transform = relay.layout_transform(weight, "NC", dst_layout=reco_weight_layout)
+        #weight_transform = relay.layout_transform(weight, "NC", dst_layout="NC64n16c")
+
+        return relay.op.nn.contrib_dense_pack(data, weight_transform, weight_layout=reco_weight_layout, 
+                units=None, out_dtype=self.attr_map["nn.dense"]["out_dtype"] if 'out_dtype' in self.attr_map['nn.dense'] else "")
+        
+
+
+'''
+ 2687   %62 = nn.dense(%61, meta[relay.Constant][13] /* ty=Tensor[(64, 64), float32] */, units=None, out_dtype="float32") /* ty=Tensor[(3136, 64), float32] */;
+'''
+
+def rewrite_dense_to_pack(mod):
+    """Rewrite the input graph to replace non maximum surpression
+    in torchvision that does not take class id into account with the one
+    that avoids IOU tests between different classes.
+    """
+    mod["main"] = rewrite(PackDenseRewrite(), mod["main"])
+    return mod
+
+
+# experiment: replace dense to conv2d kernel size = 1x1.
+
+class DenseReshapeBiasGeluRewriteV2(DFPatternCallback):
+    """A callback to rewrite gelu."""
+
+    def __init__(self, tuned_batch_size=1):
+        super(DenseReshapeBiasGeluRewriteV2, self).__init__()
+        logger.warning("hebi-dbg: DenseReshapeBiasGeluRewriteV2 1")
+        self.data = wildcard()
+        self.weight = wildcard()
+        self.bias = wildcard()
+        self.const1 = wildcard()
+        self.const2 = wildcard()
+        self.const3 = wildcard()
+
+        self.tbs = tuned_batch_size
+        self.attr_map = {}
+        
+        den = is_op("nn.dense")(self.data, self.weight)
+        re_den = is_op("reshape")(den)
+        added = is_op("add")(self.bias, re_den)
+        divisor = is_op("divide")(added, self.const1)
+        val_erf = is_op("erf")(divisor)
+        added_erf = is_op("add")(val_erf, self.const2)
+        mul1 = is_op("multiply")(added, added_erf)
+        mul2 = is_op("multiply")(mul1, self.const3)
+        self.pattern = mul2
+        logger.warning("hebi-dbg: DenseReshapeBiasGeluRewriteV2 settled")
+
+    def get_attr(self, pre):
+        def visit_func(expr):
+            if isinstance(expr, _expr.Call) and expr.op == relay.op.get("reshape"):
+                new_attrs = {}
+                for k in expr.attrs.keys():
+                    new_attrs[k] = expr.attrs[k]
+                self.attr_map["reshape"] = new_attrs
+            elif isinstance(expr, _expr.Call) and expr.op == relay.op.get("nn.dense"):
+                new_attrs = {}
+                for k in expr.attrs.keys():
+                    new_attrs[k] = expr.attrs[k]
+                self.attr_map["nn.dense"] = new_attrs
+            # print(self.attr_map)
+        
+        _analysis.post_order_visit(pre, visit_func)
+
+    def callback(self, pre, post, node_map):
+        logger.warning("hebi-dbg: DenseReshapeBiasGeluRewriteV2 rewriter")
+        self.get_attr(pre)
+
+        data = node_map[self.data][0]
+        weight = node_map[self.weight][0]
+        bias = node_map[self.bias][0]
+        const1 = node_map[self.const1][0]
+        const2 = node_map[self.const2][0]
+        const3 = node_map[self.const3][0]
+
+        # print("type weight = ", type(weight))
+        # print("weight = ", get_shape(weight))
+
+        data_shape = get_shape(data)
+        weight_shape = get_shape(weight)
+        M, K, N = data_shape[0], data_shape[1], weight_shape[0]
+
+        conv_wei_shape = (N, K, 1, 1) # kernel format OIHW
+        
+        # data = relay.op.reshape(data, newshape=(self.tbs, K, 1, relay.op.floor_divide(M, relay.const(self.tbs))))
+        data = relay.op.reshape(data, newshape=(1, K, 1, M))
+        weight = relay.op.reshape(weight, newshape=conv_wei_shape)
+        conv = relay.op.nn.conv2d(data, weight, channels=N, kernel_size=(1, 1), data_layout="NCHW")
+        re_conv = relay.reshape(conv, newshape=(1, N, -1))
+        re_conv_t = relay.transpose(re_conv, axes=(0, 2, 1))
+
+        added = relay.op.add(bias, re_conv_t)
+        divisor = relay.op.divide(added, const1)
+        val_erf = relay.op.erf(divisor)
+        added_erf = relay.op.add(val_erf, const2)
+        mul1 = relay.op.multiply(added, added_erf)
+        mul2 = relay.op.multiply(mul1, const3)
+        
+
+        ''' expect to do it 
+        data = relay.op.reshape(data, newshape=(1, K, 1, M))
+        weight = relay.op.reshape(weight, newshape=conv_wei_shape)
+        conv = relay.op.nn.conv2d(data, weight, channels=N, kernel_size=(1, 1), data_layout="NCHW")
+        added = relay.op.add(bias, conv)
+        divisor = relay.op.divide(added, const1)
+        val_erf = relay.op.erf(divisor)
+        added_erf = relay.op.add(val_erf, const2)
+        mul1 = relay.op.multiply(added, added_erf)
+        mul2 = relay.op.multiply(mul1, const3)
+        re_mul2 = relay.reshape(mul2, newshape=(1, N, -1))
+        re_mul2_t = relay.transpose(re_mul2, axes=(0, 2, 1))
+        '''
+        
+        return relay.op.reshape(mul2, self.attr_map['reshape']['newshape'])
+
+'''
+M =3136 K = 64 N = 512
+
+OIHW
+2701   %76 = nn.dense(%75, meta[relay.Constant][18] /* ty=Tensor[(512, 64), float32] */, units=None, out_dtype="float32") /*  ty=Tensor[(3136, 512), float32] */;
+2702   %77 = reshape(%76, newshape=[1, 3136, 512]) /* ty=Tensor[(1, 3136, 512), float32] */;
+2703   %78 = add(meta[relay.Constant][15] /* ty=Tensor[(512), float32] */, %77) /* ty=Tensor[(1, 3136, 512), float32] */;
+2704   %79 = divide(%78, 1.41421f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
+2705   %80 = erf(%79) /* ty=Tensor[(1, 3136, 512), float32] */;
+2706   %81 = add(%80, 1f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
+2707   %82 = multiply(%78, %81) /* ty=Tensor[(1, 3136, 512), float32] */;
+2708   %83 = multiply(%82, 0.5f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
+'''
+
+
+def rewrite_dense_bias_gelu_reshape_last_v2(mod, tuned_batch_size=1):
+    """Rewrite the input graph to replace non maximum surpression
+    in torchvision that does not take class id into account with the one
+    that avoids IOU tests between different classes.
+    """
+    mod["main"] = rewrite(DenseReshapeBiasGeluRewriteV2(tuned_batch_size), mod["main"])
+    return mod
+
+
+
+# class DenseReshapeBiasRewrite(DFPatternCallback):
+#     """A callback to rewrite gelu."""
+
+#     def __init__(self, pack_wei=False):
+#         super(DenseReshapeBiasRewrite, self).__init__()
+#         logger.warning("hebi-dbg: DenseReshapeBiasRewrite 1")
+#         self.data = wildcard()
+#         self.weight = wildcard()
+#         self.bias = wildcard()
+        
+#         self.pack_wei = pack_wei
+#         self.attr_map = {}
+        
+#         den = is_op("nn.dense")(self.data, self.weight)
+#         re_den = is_op("reshape")(den)
+#         added = is_op("add")(self.bias, re_den)
+#         self.pattern = added
+#         logger.warning("hebi-dbg: DenseReshapeBiasRewrite settled")
+
+#     def get_attr(self, pre):
+#         def visit_func(expr):
+#             if isinstance(expr, _expr.Call) and expr.op == relay.op.get("reshape"):
+#                 new_attrs = {}
+#                 for k in expr.attrs.keys():
+#                     new_attrs[k] = expr.attrs[k]
+#                 self.attr_map["reshape"] = new_attrs
+#             elif isinstance(expr, _expr.Call) and expr.op == relay.op.get("nn.dense"):
+#                 new_attrs = {}
+#                 for k in expr.attrs.keys():
+#                     new_attrs[k] = expr.attrs[k]
+#                 self.attr_map["nn.dense"] = new_attrs
+#             # print(self.attr_map)
+        
+#         _analysis.post_order_visit(pre, visit_func)
+
+#     def callback(self, pre, post, node_map):
+#         logger.warning("hebi-dbg: DenseReshapeBiasRewrite rewriter")
+#         self.get_attr(pre)
+
+#         data = node_map[self.data][0]
+#         weight = node_map[self.weight][0]
+#         bias = node_map[self.bias][0]
+        
+#         if self.pack_wei:
+#             weight_shape_list = [str(x) for x in get_shape(weight)]
+#             data_shape_list = [str(x) for x in get_shape(data)]
+
+#             data_shape = ",".join(data_shape_list)
+#             weight_shape = ",".join(weight_shape_list)
+#             out_shape = ",".join([data_shape_list[0], weight_shape_list[0]])
+            
+#             res = get_optimal_layout_for_dense(
+#                 data_shape,
+#                 weight_shape,
+#                 out_shape
+#             )
+
+#             # print("DenseReshapeBiasRewrite: res ", res)
+#             src_df, weight_df, dst_df = res.split(",")
+        
+#             new_attrs = {}
+#             reco_weight_layout = tag2layout(weight_df, is_weight=True, conv_type="Dense")
+            
+
+#             # print("DenseReshapeBiasRewrite reco_weight_layout = ", reco_weight_layout)
+#             weight_transform = relay.layout_transform(weight, "NC", dst_layout=reco_weight_layout)
+#             #weight_transform = relay.layout_transform(weight, "NC", dst_layout="NC64n16c")
+
+#             den = relay.op.nn.contrib_dense_pack(data, weight_transform, weight_layout="NC", 
+#                     units=None, out_dtype=self.attr_map["nn.dense"]["out_dtype"] if 'out_dtype' in self.attr_map['nn.dense'] else "")
+#         else:
+#             den = relay.op.nn.dense(data, weight)
+#         added = relay.op.add(bias, den)
+#         return relay.op.reshape(added, self.attr_map['reshape']['newshape'])
+
+
+'''
+ 2687   %62 = nn.dense(%61, meta[relay.Constant][13] /* ty=Tensor[(64, 64), float32] */, units=None, out_dtype="float32") /* ty=Tensor[(3136, 64), float32] */;
+ 2688   %63 = reshape(%62, newshape=[1, 3136, 64]) /* ty=Tensor[(1, 3136, 64), float32] */;
+ 2689   %64 = add(meta[relay.Constant][4] /* ty=Tensor[(64), float32] */, %63) /* ty=Tensor[(1, 3136, 64), float32] */;
+'''
+
+# def rewrite_dense_bias_reshape_last(mod, pack_wei=False):
+#     """Rewrite the input graph to replace non maximum surpression
+#     in torchvision that does not take class id into account with the one
+#     that avoids IOU tests between different classes.
+#     """
+#     mod["main"] = rewrite(DenseReshapeBiasRewrite(pack_wei), mod["main"])
+#     return mod

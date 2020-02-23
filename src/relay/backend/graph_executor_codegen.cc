@@ -201,9 +201,9 @@ class GraphExecutorCodegen : public backend::MemoizedExprTranslator<std::vector<
   }
 
   LoweredOutput Codegen(IRModule mod, relay::Function func, String mod_name) {
-    std::cout << "hebi-dbg: code gen enter\n";
+    // std::cout << "hebi-dbg: code gen enter\n";
     // std::cout << "compiling: ( " << PrettyPrint(func) << " ) \n";
-    std::cout << "mod_name: " << mod_name << "\n";
+    // std::cout << "mod_name: " << mod_name << "\n";
     mod_name_ = mod_name;
     VLOG_CONTEXT << "GraphExecutorCodegen";
     VLOG(1) << "compiling:" << std::endl << PrettyPrint(func);
@@ -451,7 +451,7 @@ class GraphExecutorCodegen : public backend::MemoizedExprTranslator<std::vector<
         return AddNode(node, call);
       }
     } else if (!call_node->attrs.defined()) {  // Call is an extern function
-      std::cout << "call_node: \n" << PrettyPrint(call) << std::endl;
+      // std::cout << "call_node: \n" << PrettyPrint(call) << std::endl;
       const auto* func = call_node->op.as<GlobalVarNode>();
       ICHECK(func) << "Expected the operator to be a global var, but got "
                    << call_node->op->GetTypeKey();  // getting a relay fn here, not sure why.
