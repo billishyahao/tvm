@@ -306,6 +306,44 @@ extern "C" void dnnl_binary_op(float* data, float* weight, float* out, int algo_
   read_from_dnnl_memory(out, dst_memory);
 }
 
+/*
+extern "C" void dnnl_layernorm_op(engine &cpu_engine, stream &cpu_stream, short *src, float *gamma, float *beta, int batchSize, int maxTokenSize)
+{
+  memory::dims src_dims = {batchSize * maxTokenSize, hiddenSize};
+  memory::dims scale_dims = {1, hiddenSize};
+  memory::dims shift_dims = {1, hiddenSize};
+  auto src_md = memory::desc(src_dims, memory::data_type::bf16, memory::format_tag::nc);
+  auto scale_md = memory::desc(scale_dims, memory::data_type::f32, memory::format_tag::nc);
+  auto shift_md = memory::desc(shift_dims, memory::data_type::f32, memory::format_tag::nc);
+
+  if (!is_lnorm_init)
+  {
+    const float epsilon = 9.999999974752427e-7;
+    auto lnorm_desc = layer_normalization_forward::desc(prop_kind::forward_inference, src_md, epsilon,
+                                                        normalization_flags::use_scale | normalization_flags::use_shift);
+    auto lnorm_pd = layer_normalization_forward::primitive_desc(lnorm_desc, cpu_engine);
+    auto lnorm_prim = layer_normalization_forward(lnorm_pd);
+    layernorm_pd = lnorm_pd;
+    layernorm = lnorm_prim;
+    is_lnorm_init = true;
+  }
+
+  auto src_mem = memory(src_md, cpu_engine, src);
+  auto scale_mem = memory(scale_md, cpu_engine, gamma);
+  auto shift_mem = memory(shift_md, cpu_engine, beta);
+  auto mean_mem = memory(layernorm_pd.mean_desc(), cpu_engine);
+  auto variance_mem = memory(layernorm_pd.variance_desc(), cpu_engine);
+
+  layernorm.execute(cpu_stream, {{DNNL_ARG_SRC, src_mem},
+                                 {DNNL_ARG_MEAN, mean_mem},
+                                 {DNNL_ARG_VARIANCE, variance_mem},
+                                 {DNNL_ARG_SCALE, scale_mem},
+                                 {DNNL_ARG_SHIFT, shift_mem},
+                                 {DNNL_ARG_DST, src_mem}});
+  cpu_stream.wait();
+}
+*/
+
 }  // namespace contrib
 }  // namespace runtime
 }  // namespace tvm

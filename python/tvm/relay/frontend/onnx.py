@@ -232,7 +232,7 @@ def matmul_out_dtype(inputs, out_dtype):
     a_rank = infer_shape(a_shape)[0]
     b_shape = shape_of(inputs[1])
     b_rank = infer_shape(b_shape)[0]
-    if a_rank > 2 or b_rank > 2:
+    if a_rank > 3 or b_rank > 2: # hebi-dbg
 
         def flatten_to_nd(x, x_shape, nd=3):
             ndims = infer_shape(x_shape)[0]
@@ -1085,6 +1085,7 @@ class MatMul(OnnxOpConverter):
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
         assert len(inputs) == 2, "MatMul op take 2 inputs, {} given".format(len(inputs))
+        print("hebi-dbg: matmul impl_v1 enter")
         # Need to check input shape as batch matmul must be supported.
         return matmul_out_dtype(inputs, out_dtype=infer_type(inputs[0]).checked_type.dtype)
 
@@ -5366,6 +5367,7 @@ class GraphProto:
         """Nodes are stored as directed acyclic graph."""
         for node in graph.node:
             op_name = node.op_type
+            print("hebi-dbg: op_name: " + op_name)
             attr = self._parse_attr(node.attribute)
             # Create and populate input list.
             inputs = onnx_input()
@@ -5380,6 +5382,7 @@ class GraphProto:
             attr["tvm_custom"]["name"] = i_name
             attr["tvm_custom"]["num_outputs"] = len(node_output)
 
+            ## convert onnx operator to a relay op
             op = self._convert_operator(op_name, inputs, attr, self.opset)
             if not isinstance(op, _expr.TupleWrapper):
                 outputs_num = 1

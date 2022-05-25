@@ -41,7 +41,7 @@ from tvm.relay.expr import GlobalVar
 from tvm.relay.expr_functor import ExprMutator, ExprVisitor
 
 from ... import _ffi_api
-from ...dataflow_pattern import wildcard, is_op
+from ...dataflow_pattern import wildcard, is_op, is_constant, rewrite, DFPatternCallback
 from .register import register_pattern_table
 
 logger = logging.getLogger("DNNL")
@@ -84,15 +84,22 @@ _register_external_op_helper("abs")
 _register_external_op_helper("clip")
 _register_external_op_helper("exp")
 _register_external_op_helper("log")
+#_register_external_op_helper("sqrt")
 _register_external_op_helper("sqrt")
+####
 _register_external_op_helper("round")
 _register_external_op_helper("nn.relu")
 _register_external_op_helper("nn.leaky_relu")
 _register_external_op_helper("tanh")
 _register_external_op_helper("sigmoid")
 _register_external_op_helper("nn.softmax")
-_register_external_op_helper("add")
-_register_external_op_helper("multiply")
+# _register_external_op_helper("add")
+# _register_external_op_helper("multiply")
+#_register_external_op_helper("add")
+#_register_external_op_helper("multiply")
+###
+_register_external_op_helper("nn.layer_norm")
+####
 
 
 def make_conv_pattern(conv_name, with_bias=True, with_eltwise=None):
@@ -144,9 +151,57 @@ def make_dense_pattern(with_bias=True, with_eltwise=None):
         dense_out = is_op("add")(dense, bias)
     else:
         dense_out = dense
+    
     if with_eltwise:
         dense_out = is_op(with_eltwise)(dense_out)
     return dense_out
+
+def make_dense_pattern1(with_bias=True, with_eltwise=None):
+    """Create patterns related to nn.dense.
+
+    Parameters
+    ----------
+    with_bias : bool
+        Whether attach `bias_add` to `nn.dense`.
+    with_eltwise : str
+        The attached elementwise post-op name.
+    Returns
+    -------
+    dense_out : CallPattern
+        Call node sequence.
+    """
+    data = wildcard()
+    weight = wildcard()
+    bias = wildcard()
+    dense = is_op("nn.dense")(data, weight)
+    re_dense = dense | is_op("reshape")(dense)
+    if with_bias:
+        dense_out = is_op("add")(re_dense, bias)
+    else:
+        dense_out = re_dense
+    if with_eltwise == "gelu":
+        div = is_op("divide")(dense_out, is_constant())
+        erf_val = is_op("erf")(div)
+        added_erf_val = is_op("add")(erf_val, is_constant())
+        mul_val = is_op("multiply")(dense_out, added_erf_val)
+        dense_out = is_op("multiply")(mul_val, is_constant())
+
+    elif with_eltwise:
+        dense_out = is_op(with_eltwise)(dense_out)
+    return dense_out
+
+'''
+ dense_add_gelu 
+ 2800   %48 = nn.dense(%47, meta[relay.Constant][18] /* ty=Tensor[(512, 64), float32] */, units=None, out_dtype="float32") /* ty=Tensor[(3136, 512), float32] */;
+ 2801   %49 = reshape(%48, newshape=[1, 3136, 512]) /* ty=Tensor[(1, 3136, 512), float32] */;
+ 2802   %50 = add(meta[relay.Constant][15] /* ty=Tensor[(512), float32] */, %49) /* ty=Tensor[(1, 3136, 512), float32] */;
+ 2803   %51 = divide(%50, 1.41421f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
+ 2804   %52 = erf(%51) /* ty=Tensor[(1, 3136, 512), float32] */;
+ 2805   %53 = add(%52, 1f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
+ 2806   %54 = multiply(%50, %53) /* ty=Tensor[(1, 3136, 512), float32] */;
+ 2807   %55 = multiply(%54, 0.5f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
+
+'''
 
 
 def make_dnnl_pattern(op_name, with_bias, with_eltwise):
@@ -193,12 +248,17 @@ def pattern_table():
     dnnl_patterns : List[dnnl_pattern]
         Created patterns.
     """
+    #elt_list = ["nn.relu", "tanh", "sigmoid", "gelu", None]
     elt_list = ["nn.relu", "tanh", "sigmoid", None]
     dnnl_patterns = []
+    # dnnl_patterns.append(("dnnl.layernorm_", make_layer_norm_pattern()))
     for with_bias in [True, False]:
+    #for with_bias in [True]:
+        # logger.warning("hebi-dbg: make_layer_norm_pattern 2.1")
         for elt in elt_list:
             if not with_bias and not elt:
-                return dnnl_patterns
+                # logger.warning("hebi-dbg: make_layer_norm_pattern 2.3")
+                continue
             for conv_name in [
                 "nn.conv1d",
                 "nn.conv2d",
@@ -206,8 +266,12 @@ def pattern_table():
                 "nn.conv2d_transpose",
                 "nn.conv3d_transpose",
             ]:
-                dnnl_patterns.append(make_dnnl_pattern(conv_name, with_bias, elt))
+                if elt != "gelu":
+                    dnnl_patterns.append(make_dnnl_pattern(conv_name, with_bias, elt))
             dnnl_patterns.append(make_dnnl_pattern("nn.dense", with_bias, elt))
+            #dnnl_patterns.append(make_dnnl_pattern("xxx", with_bias, elt))
+        # logger.warning("hebi-dbg: make_layer_norm_pattern 2.2")
+    logger.warning("hebi-dbg: make_layer_norm_pattern 3")
     return dnnl_patterns
 
 
@@ -505,3 +569,55 @@ def prune_dnnl_subgraphs(mod):
     new_mod["main"] = SubgraphRemover(subgraphs_to_remove, mod, new_mod).visit(mod["main"])
     new_mod = transform.RemoveUnusedFunctions()(new_mod)
     return new_mod
+'''
+  20   %4 = mean(%3, axis=[-1], keepdims=True) /* ty=Tensor[(1, 3136, 1), float32] */;
+  21   %5 = subtract(%3, %4) /* ty=Tensor[(1, 3136, 64), float32] */;
+  22   %6 = cast(%5, dtype="float32") /* ty=Tensor[(1, 3136, 64), float32] */;
+  23   %7 = power(%6, 2f /* ty=float32 */) /* ty=Tensor[(1, 3136, 64), float32] */;
+  24   %8 = mean(%7, axis=[-1], keepdims=True) /* ty=Tensor[(1, 3136, 1), float32] */;
+  25   %9 = add(%8, 1e-05f /* ty=float32 */) /* ty=Tensor[(1, 3136, 1), float32] */;
+  26   %10 = sqrt(%9) /* ty=Tensor[(1, 3136, 1), float32] */;
+  27   %11 = divide(%5, %10) /* ty=Tensor[(1, 3136, 64), float32] */;
+  28   %12 = multiply(%11, meta[relay.Constant][2] /* ty=Tensor[(64), float32] */) /* ty=Tensor[(1, 3136, 64), float32] */;
+  29   %13 = add(%12, meta[relay.Constant][3] /* ty=Tensor[(64), float32] */) /* ty=Tensor[(1, 3136, 64), float32] */;
+'''
+class LayerNormRewrite(DFPatternCallback):
+    """A callback to rewrite layer norm."""
+
+    def __init__(self):
+        super(LayerNormRewrite, self).__init__()
+        logger.warning("hebi-dbg: make_layer_norm_pattern 1")
+        self.data = wildcard()
+        self.eps = wildcard()
+        self.gamma = wildcard()
+        self.beta = wildcard()
+        mu = is_op("mean")(self.data)
+        diff = is_op("subtract")(self.data, mu)
+        cdiff = diff | is_op("cast")(diff)
+        p1 = is_op("power")(cdiff, is_constant())
+        p2 = is_op("mean")(p1)
+        added_eps = is_op("add")(p2, self.eps)
+        deno = is_op("sqrt")(added_eps)
+        div_out = is_op("divide")(diff, deno)
+        weighted = is_op("multiply")(div_out, self.gamma)
+        added_bias = is_op("add")(weighted, self.beta)
+        self.pattern = added_bias
+        logger.warning("hebi-dbg: make_layer_norm_pattern settled")
+
+
+    def callback(self, pre, post, node_map):
+        logger.warning("hebi-dbg: layer normal rewriter")
+        data = node_map[self.data][0]
+        gamma = node_map[self.gamma][0]
+        beta = node_map[self.beta][0]
+        eps = node_map[self.eps][0]
+        return relay.op.nn.layer_norm(data=data, gamma=gamma, beta=beta, epsilon=1e-5)
+
+
+def rewrite_layer_norm(mod):
+    """Rewrite the input graph to replace non maximum surpression
+    in torchvision that does not take class id into account with the one
+    that avoids IOU tests between different classes.
+    """
+    mod["main"] = rewrite(LayerNormRewrite(), mod["main"])
+    return mod

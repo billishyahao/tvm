@@ -449,6 +449,8 @@ class DNNLJSONSerializer : public backend::contrib::JSONSerializer {
       {"nn.deconv3d", "nn.conv3d_transpose"},
   };
 
+// dnnl.conv2d_bias
+// dnnl.dense_bias_gelu => nn.dense_reshape_add_divide_erf_add_multiply_multiply_
   std::vector<std::string> ParsingOpList(const std::string& pattern_name,
                                          std::string interval = "_") {
     ICHECK_NE(pattern_name, "");
@@ -461,7 +463,9 @@ class DNNLJSONSerializer : public backend::contrib::JSONSerializer {
         if (op_name.find("deconv") != std::string::npos) {
           op_name = op_map[op_name];
         }
-      } else {
+      } else if (op_name.find("gelu") != std::string::npos) {
+        op_name.replace(op_name.find("gelu"), 4, "nn");
+      }  else {
         op_name = op_map[op_name];
       }
       if (pos > start) op_list.push_back(op_name);
