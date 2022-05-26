@@ -447,32 +447,37 @@ class DNNLJSONSerializer : public backend::contrib::JSONSerializer {
       {"sigmoid", "sigmoid"},
       {"nn.deconv2d", "nn.conv2d_transpose"},
       {"nn.deconv3d", "nn.conv3d_transpose"},
+      {"add", "add"},
+      {"multiply", "multiply"},
   };
 
 // dnnl.conv2d_bias
-// dnnl.dense_bias_gelu => nn.dense_reshape_add_divide_erf_add_multiply_multiply_
+// dnnl.dense_bias_gelu => nn.dense_add_divide_erf_add_multiply_multiply_
   std::vector<std::string> ParsingOpList(const std::string& pattern_name,
                                          std::string interval = "_") {
     ICHECK_NE(pattern_name, "");
     std::vector<std::string> op_list;
     size_t pos = 0, start = 0;
-    while ((pos = pattern_name.find(interval, start)) != std::string::npos) {
-      std::string op_name = pattern_name.substr(start, pos - start);
+
+    std::string raw_name = pattern_name;
+    if (raw_name.find("gelu") != std::string::npos) {
+      raw_name.replace(raw_name.find("gelu"), 4, "multiply_multiply_");
+    } 
+    while ((pos = raw_name.find(interval, start)) != std::string::npos) {
+      std::string op_name = raw_name.substr(start, pos - start);
       if (op_name.find("dnnl") != std::string::npos) {
         op_name.replace(op_name.find("dnnl"), 4, "nn");
         if (op_name.find("deconv") != std::string::npos) {
           op_name = op_map[op_name];
         }
-      } else if (op_name.find("gelu") != std::string::npos) {
-        op_name.replace(op_name.find("gelu"), 4, "nn");
-      }  else {
+      } else {
         op_name = op_map[op_name];
       }
       if (pos > start) op_list.push_back(op_name);
       start = pos + interval.size();
     }
-    if (pattern_name.size() > start) {
-      op_list.push_back(op_map[pattern_name.substr(start)]);
+    if (raw_name.size() > start) {
+      op_list.push_back(op_map[raw_name.substr(start)]);
     }
     return op_list;
   }
@@ -513,6 +518,13 @@ class DNNLJSONSerializer : public backend::contrib::JSONSerializer {
         ICHECK(call->op.as<OpNode>()) << "Not op node";
       } else if (name.find("dnnl.dense") != std::string::npos) {
         std::vector<std::string> op_list = ParsingOpList(name);
+        std::cout << "hebi-dbg: name (" << name << ")";
+        std::cout << "hebi-dbg: op_list (";
+        for (auto s: op_list) {
+          std::cout << s << ", ";
+        }
+        std::cout << ")";
+        //TODO: XXX hebi why 4 here 
         call = GetRootCall(fn->body.as<CallNode>(), op_list.size() - 1, op_list);
         ICHECK(call->op.as<OpNode>()) << "Not op node";
       } else {

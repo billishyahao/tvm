@@ -168,6 +168,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
     std::regex relu_pat(".*_relu.*");
     std::regex tanh_pat(".*_tanh.*");
     std::regex sigmoid_pat(".*_sigmoid.*");
+    std::regex gelu_pat(".*_gelu.*");
 
     // Parsing post-ops.
     dnnl::post_ops ops;
@@ -179,6 +180,9 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
     }
     if (std::regex_match(op_name, sigmoid_pat)) {
       ops.append_eltwise(1.f, dnnl::algorithm::eltwise_logistic, 0.f, 0.f);
+    }
+    if (std::regex_match(op_name, gelu_pat)) {
+      ops.append_eltwise(1.f, dnnl::algorithm::eltwise_gelu_erf, 0.f, 0.f);
     }
     attr.set_post_ops(ops);
 
@@ -256,7 +260,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
         ICHECK_EQ(node.GetOpType(), "kernel");
         auto op_name = node.GetOpName();
         // LOG(INFO) << "hebi-dbg: json rt op: " << op_name;
-        std::cout << "hebi-dbg: json rt op: " << op_name << ". ";
+        std::cout << "hebi-dbg: json rt op: " << op_name << ". \n";
         
         if (std::regex_match(op_name, deconv_pat) ||
             std::regex_match(op_name, conv_transpose_pat)) {
@@ -264,8 +268,8 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
         } else if (std::regex_match(op_name, conv_pat)) {
           Convolution(nid);
         } else if (std::regex_match(op_name, dense_pat)) {
-          //Dense(nid);
-          DenseMM(nid);
+          Dense(nid);
+          //DenseMM(nid);
         } else if ("nn.batch_norm" == op_name) {
           BatchNorm(nid);
         } else if (std::regex_match(op_name, max_pool_pat)) {
@@ -566,7 +570,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
   }
 
   void DenseMM(const size_t& nid) {
-    std:: cout << "hebi-dbg: enter densemm " << ": ";
+    std:: cout << "hebi-dbg: enter densemm " << ": \n";
     auto node = nodes_[nid];
     auto op_name = node.GetOpName();
     dnnl::primitive_attr attr;
@@ -603,30 +607,30 @@ std::cout << "hebi-dbg: out_dims " << ": (";
 for(auto i : out_dims) {
   std::cout << i << ", ";
 }
-std::cout << "), ";
+std::cout << ") \n";
 
 
     // Memory descriptions.
     auto data_md = dnnl::memory::desc({data_dims, dt::f32, tag::abc});
-std::cout << "hebi-dbg: data_md " << ": ";
+std::cout << "hebi-dbg: data_md " << "created \n ";
     auto weight_md = dnnl::memory::desc({weight_dims, dt::f32, tag::abc});
-std::cout << "hebi-dbg: weight_md " << ": ";
+std::cout << "hebi-dbg: weight_md " << "created \n ";
     auto bias_md = dnnl::memory::desc({bias_dims, dt::f32, tag::abc});
-std::cout << "hebi-dbg: bias_md " << ": ";
+std::cout << "hebi-dbg: bias_md " << "created \n ";
     auto dst_md = dnnl::memory::desc({out_dims, dt::f32, tag::abc});
-std::cout << "hebi-dbg: dst_md " << ": ";
+std::cout << "hebi-dbg: dst_md " << "created \n ";
 
     // Dense description.
     auto dense_desc = dnnl::matmul::desc(data_md, weight_md, bias_md, dst_md);
 
-std::cout << "hebi-dbg: dense desc  " << ": ";
+std::cout << "hebi-dbg: dense desc  " << ". \n";
 
     // Enable elementwise post-ops.
     auto dense_prim_desc = dnnl::matmul::primitive_desc(dense_desc, attr, engine_);
-std::cout << "hebi-dbg: before matmul" << ": ";
+std::cout << "hebi-dbg: before matmul" << ". \n";
     auto dense = dnnl::matmul(dense_prim_desc);
     net_.push_back(dense);
-std::cout << "hebi-dbg: after matmul" << ": ";
+std::cout << "hebi-dbg: after matmul" << ". \n";
     // Memories.
     auto data_memory = BindDNNLMemory(data_entry, data_md);
     auto weight_memory = BindDNNLMemory(weight_entry, weight_md);
@@ -634,14 +638,74 @@ std::cout << "hebi-dbg: after matmul" << ": ";
     // Bias memory.
     auto bias_memory = dnnl::memory(bias_md, engine_);
     if (has_bias) {
-      std:: cout << "hebi-dbg: has_bias" << ": ";
+      std:: cout << "hebi-dbg: has_bias" << ". \n";
       auto bias_entry = node.GetInputs()[2];
       BindDNNLMemory(bias_entry, bias_memory);
     } else {
       float bias[OC] = {0};
       write_to_dnnl_memory(bias, bias_memory, OC * sizeof(float));
     }
-    std::cout << "hebi-dbg: after bias memory" << ": ";
+    std::cout << "hebi-dbg: after bias memory" << ". \n";
+
+    // Output memory.
+    auto dst_memory = BindDNNLMemory(out_entry, dense_prim_desc.dst_desc());
+
+    net_args_.push_back({{DNNL_ARG_SRC, data_memory},
+                         {DNNL_ARG_WEIGHTS, weight_memory},
+                         {DNNL_ARG_BIAS, bias_memory},
+                         {DNNL_ARG_DST, dst_memory}});
+  }
+
+  void Dense1(const size_t& nid) {
+    auto node = nodes_[nid];
+    auto op_name = node.GetOpName();
+    dnnl::primitive_attr attr;
+    bool has_bias = ParsingOpName(op_name, attr);
+
+    // Setup attributes.
+    auto data_entry = node.GetInputs()[0];
+    auto weight_entry = node.GetInputs()[1];
+    JSONGraphNodeEntry out_entry(nid, 0);
+    dnnl::memory::dims input_shape = nodes_[data_entry.id_].GetOpShape()[data_entry.index_];
+    dnnl::memory::dims weight_shape = nodes_[weight_entry.id_].GetOpShape()[weight_entry.index_];
+    dnnl::memory::dims out_shape = nodes_[out_entry.id_].GetOpShape()[out_entry.index_];
+    dnnl::memory::dim OC = out_shape[2];
+
+    // Memory shapes.
+    dnnl::memory::dims data_dims = {input_shape[1], input_shape[2]};
+    dnnl::memory::dims weight_dims = weight_shape;
+    dnnl::memory::dims bias_dims = {OC};
+    dnnl::memory::dims out_dims = {out_shape[1], out_shape[2]};
+
+    // Memory descriptions.
+    auto data_md = dnnl::memory::desc({data_dims, dt::f32, tag::nc});
+    auto weight_md = dnnl::memory::desc({weight_dims, dt::f32, tag::nc});
+    auto bias_md = dnnl::memory::desc({bias_dims, dt::f32, tag::x});
+    auto dst_md = dnnl::memory::desc({out_dims, dt::f32, tag::nc});
+
+    // Dense description.
+    auto dense_desc = dnnl::inner_product_forward::desc(dnnl::prop_kind::forward_inference, data_md,
+                                                        weight_md, bias_md, dst_md);
+
+    // Enable elementwise post-ops.
+    auto dense_prim_desc = dnnl::inner_product_forward::primitive_desc(dense_desc, attr, engine_);
+
+    auto dense = dnnl::inner_product_forward(dense_prim_desc);
+    net_.push_back(dense);
+
+    // Memories.
+    auto data_memory = BindDNNLMemory(data_entry, data_md);
+    auto weight_memory = BindDNNLMemory(weight_entry, weight_md);
+
+    // Bias memory.
+    auto bias_memory = dnnl::memory(bias_md, engine_);
+    if (has_bias) {
+      auto bias_entry = node.GetInputs()[2];
+      BindDNNLMemory(bias_entry, bias_memory);
+    } else {
+      float bias[OC] = {0};
+      write_to_dnnl_memory(bias, bias_memory, OC * sizeof(float));
+    }
 
     // Output memory.
     auto dst_memory = BindDNNLMemory(out_entry, dense_prim_desc.dst_desc());

@@ -441,6 +441,7 @@ inline bool IsOp(const CallNode* call, const std::string& op_name) {
  */
 inline const CallNode* GetRootCall(const CallNode* current_call, int depth,
                                    const std::vector<std::string>& expected_op_names) {
+std::cout << "hebi-dbg: depth: " << depth << ", current_call, " << current_call->op.as<OpNode>()->name << " . ";
   ICHECK(current_call && depth >= 0 && static_cast<size_t>(depth) < expected_op_names.size() &&
          IsOp(current_call, expected_op_names[depth]));
 

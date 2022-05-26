@@ -40,6 +40,9 @@ from tvm.relay import transform
 from tvm.relay.expr import GlobalVar
 from tvm.relay.expr_functor import ExprMutator, ExprVisitor
 
+from tvm.relay.analysis import analysis as _analysis
+from tvm.relay import expr as _expr
+
 from ... import _ffi_api
 from ...dataflow_pattern import wildcard, is_op, is_constant, rewrite, DFPatternCallback
 from .register import register_pattern_table
@@ -129,7 +132,7 @@ def make_conv_pattern(conv_name, with_bias=True, with_eltwise=None):
     return conv_out
 
 
-def make_dense_pattern(with_bias=True, with_eltwise=None):
+def make_dense_pattern_origin(with_bias=True, with_eltwise=None):
     """Create patterns related to nn.dense.
 
     Parameters
@@ -156,7 +159,7 @@ def make_dense_pattern(with_bias=True, with_eltwise=None):
         dense_out = is_op(with_eltwise)(dense_out)
     return dense_out
 
-def make_dense_pattern1(with_bias=True, with_eltwise=None):
+def make_dense_pattern(with_bias=True, with_eltwise=None):
     """Create patterns related to nn.dense.
 
     Parameters
@@ -174,11 +177,10 @@ def make_dense_pattern1(with_bias=True, with_eltwise=None):
     weight = wildcard()
     bias = wildcard()
     dense = is_op("nn.dense")(data, weight)
-    re_dense = dense | is_op("reshape")(dense)
     if with_bias:
-        dense_out = is_op("add")(re_dense, bias)
+        dense_out = is_op("add")(dense, bias)
     else:
-        dense_out = re_dense
+        dense_out = dense
     if with_eltwise == "gelu":
         div = is_op("divide")(dense_out, is_constant())
         erf_val = is_op("erf")(div)
@@ -192,14 +194,14 @@ def make_dense_pattern1(with_bias=True, with_eltwise=None):
 
 '''
  dense_add_gelu 
- 2800   %48 = nn.dense(%47, meta[relay.Constant][18] /* ty=Tensor[(512, 64), float32] */, units=None, out_dtype="float32") /* ty=Tensor[(3136, 512), float32] */;
- 2801   %49 = reshape(%48, newshape=[1, 3136, 512]) /* ty=Tensor[(1, 3136, 512), float32] */;
- 2802   %50 = add(meta[relay.Constant][15] /* ty=Tensor[(512), float32] */, %49) /* ty=Tensor[(1, 3136, 512), float32] */;
- 2803   %51 = divide(%50, 1.41421f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
- 2804   %52 = erf(%51) /* ty=Tensor[(1, 3136, 512), float32] */;
- 2805   %53 = add(%52, 1f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
- 2806   %54 = multiply(%50, %53) /* ty=Tensor[(1, 3136, 512), float32] */;
- 2807   %55 = multiply(%54, 0.5f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
+ 1326   %76 = nn.dense(%75, meta[relay.Constant][18] /* ty=Tensor[(512, 64), float32] */, units=None, out_dtype="float32") /* ty=Tensor[(1, 3136, 512), float32] */;
+ 1327   %77 = add(meta[relay.Constant][15] /* ty=Tensor[(512), float32] */, %76) /* ty=Tensor[(1, 3136, 512), float32] */;
+ 1328   %78 = divide(%77, 1.41421f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
+ 1329   %79 = erf(%78) /* ty=Tensor[(1, 3136, 512), float32] */;
+ 1330   %80 = add(%79, 1f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
+ 1331   %81 = multiply(%77, %80) /* ty=Tensor[(1, 3136, 512), float32] */;
+ 1332   %82 = multiply(%81, 0.5f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
+
 
 '''
 
@@ -248,8 +250,8 @@ def pattern_table():
     dnnl_patterns : List[dnnl_pattern]
         Created patterns.
     """
-    #elt_list = ["nn.relu", "tanh", "sigmoid", "gelu", None]
-    elt_list = ["nn.relu", "tanh", "sigmoid", None]
+    elt_list = ["nn.relu", "tanh", "sigmoid", "gelu", None]
+    #elt_list = ["nn.relu", "tanh", "sigmoid", None]
     dnnl_patterns = []
     # dnnl_patterns.append(("dnnl.layernorm_", make_layer_norm_pattern()))
     for with_bias in [True, False]:
@@ -620,4 +622,141 @@ def rewrite_layer_norm(mod):
     that avoids IOU tests between different classes.
     """
     mod["main"] = rewrite(LayerNormRewrite(), mod["main"])
+    return mod
+
+
+
+class DenseReshapeBiasGeluRewrite(DFPatternCallback):
+    """A callback to rewrite gelu."""
+
+    def __init__(self):
+        super(DenseReshapeBiasGeluRewrite, self).__init__()
+        logger.warning("hebi-dbg: DenseReshapeBiasGeluRewrite 1")
+        self.data = wildcard()
+        self.weight = wildcard()
+        self.bias = wildcard()
+        self.const1 = wildcard()
+        self.const2 = wildcard()
+        self.const3 = wildcard()
+
+        self.attr_map = {}
+        
+        den = is_op("nn.dense")(self.data, self.weight)
+        re_den = is_op("reshape")(den)
+        added = is_op("add")(self.bias, re_den)
+        divisor = is_op("divide")(added, self.const1)
+        val_erf = is_op("erf")(divisor)
+        added_erf = is_op("add")(val_erf, self.const2)
+        mul1 = is_op("multiply")(added, added_erf)
+        mul2 = is_op("multiply")(mul1, self.const3)
+        self.pattern = mul2
+        logger.warning("hebi-dbg: DenseReshapeBiasGeluRewrite settled")
+
+    def get_attr(self, pre):
+        def visit_func(expr):
+            if isinstance(expr, _expr.Call) and expr.op == relay.op.get("reshape"):
+                new_attrs = {}
+                for k in expr.attrs.keys():
+                    new_attrs[k] = expr.attrs[k]
+                self.attr_map = new_attrs
+                print(self.attr_map)
+        
+        _analysis.post_order_visit(pre, visit_func)
+
+    def callback(self, pre, post, node_map):
+        logger.warning("hebi-dbg: DenseReshapeBiasGeluRewrite rewriter")
+        self.get_attr(pre)
+
+        data = node_map[self.data][0]
+        weight = node_map[self.weight][0]
+        bias = node_map[self.bias][0]
+        const1 = node_map[self.const1][0]
+        const2 = node_map[self.const2][0]
+        const3 = node_map[self.const3][0]
+        
+        den = relay.op.nn.dense(data, weight)
+        added = relay.op.add(bias, den)
+        divisor = relay.op.divide(added, const1)
+        val_erf = relay.op.erf(divisor)
+        added_erf = relay.op.add(val_erf, const2)
+        mul1 = relay.op.multiply(added, added_erf)
+        mul2 = relay.op.multiply(mul1, const3)
+        return relay.op.reshape(mul2, self.attr_map['newshape'])
+
+'''
+2701   %76 = nn.dense(%75, meta[relay.Constant][18] /* ty=Tensor[(512, 64), float32] */, units=None, out_dtype="float32") /*  ty=Tensor[(3136, 512), float32] */;
+2702   %77 = reshape(%76, newshape=[1, 3136, 512]) /* ty=Tensor[(1, 3136, 512), float32] */;
+2703   %78 = add(meta[relay.Constant][15] /* ty=Tensor[(512), float32] */, %77) /* ty=Tensor[(1, 3136, 512), float32] */;
+2704   %79 = divide(%78, 1.41421f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
+2705   %80 = erf(%79) /* ty=Tensor[(1, 3136, 512), float32] */;
+2706   %81 = add(%80, 1f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
+2707   %82 = multiply(%78, %81) /* ty=Tensor[(1, 3136, 512), float32] */;
+2708   %83 = multiply(%82, 0.5f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
+'''
+
+
+def rewrite_gelu_reshape_last(mod):
+    """Rewrite the input graph to replace non maximum surpression
+    in torchvision that does not take class id into account with the one
+    that avoids IOU tests between different classes.
+    """
+    mod["main"] = rewrite(DenseReshapeBiasGeluRewrite(), mod["main"])
+    return mod
+
+
+
+class DenseReshapeBiasRewrite(DFPatternCallback):
+    """A callback to rewrite gelu."""
+
+    def __init__(self):
+        super(DenseReshapeBiasRewrite, self).__init__()
+        logger.warning("hebi-dbg: DenseReshapeBiasRewrite 1")
+        self.data = wildcard()
+        self.weight = wildcard()
+        self.bias = wildcard()
+
+        self.attr_map = {}
+        
+        den = is_op("nn.dense")(self.data, self.weight)
+        re_den = is_op("reshape")(den)
+        added = is_op("add")(self.bias, re_den)
+        self.pattern = added
+        logger.warning("hebi-dbg: DenseReshapeBiasRewrite settled")
+
+    def get_attr(self, pre):
+        def visit_func(expr):
+            if isinstance(expr, _expr.Call) and expr.op == relay.op.get("reshape"):
+                new_attrs = {}
+                for k in expr.attrs.keys():
+                    new_attrs[k] = expr.attrs[k]
+                self.attr_map = new_attrs
+                print(self.attr_map)
+        
+        _analysis.post_order_visit(pre, visit_func)
+
+    def callback(self, pre, post, node_map):
+        logger.warning("hebi-dbg: DenseReshapeBiasRewrite rewriter")
+        self.get_attr(pre)
+
+        data = node_map[self.data][0]
+        weight = node_map[self.weight][0]
+        bias = node_map[self.bias][0]
+        
+        den = relay.op.nn.dense(data, weight)
+        added = relay.op.add(bias, den)
+        return relay.op.reshape(added, self.attr_map['newshape'])
+
+
+'''
+ 2687   %62 = nn.dense(%61, meta[relay.Constant][13] /* ty=Tensor[(64, 64), float32] */, units=None, out_dtype="float32") /* ty=Tensor[(3136, 64), float32] */;
+ 2688   %63 = reshape(%62, newshape=[1, 3136, 64]) /* ty=Tensor[(1, 3136, 64), float32] */;
+ 2689   %64 = add(meta[relay.Constant][4] /* ty=Tensor[(64), float32] */, %63) /* ty=Tensor[(1, 3136, 64), float32] */;
+'''
+
+def rewrite_dense_bias_reshape_last(mod):
+    """Rewrite the input graph to replace non maximum surpression
+    in torchvision that does not take class id into account with the one
+    that avoids IOU tests between different classes.
+    """
+    mod["main"] = rewrite(DenseReshapeBiasRewrite(), mod["main"])
     return mod

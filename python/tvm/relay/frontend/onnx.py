@@ -232,7 +232,7 @@ def matmul_out_dtype(inputs, out_dtype):
     a_rank = infer_shape(a_shape)[0]
     b_shape = shape_of(inputs[1])
     b_rank = infer_shape(b_shape)[0]
-    if a_rank > 3 or b_rank > 2: # hebi-dbg
+    if a_rank > 2 or b_rank > 2: # hebi-dbg
 
         def flatten_to_nd(x, x_shape, nd=3):
             ndims = infer_shape(x_shape)[0]
