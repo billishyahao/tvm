@@ -784,6 +784,7 @@ class LowerTensorExprMutator : public DeviceAwareExprMutator {
     // Lower the primitive function for that target.
     Function function = Downcast<Function>(primitive_func);
     ICHECK(call_node->type_args.empty()) << "lowered functions cannot be polymorphic";
+    std::cout << "hebi-dbg: DeviceAwareVisitExpr_ exit \n";
     return MakeLoweredCall(function, std::move(new_args), call_node->span, target);
   }
 

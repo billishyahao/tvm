@@ -201,9 +201,9 @@ def partition_for_dnnl(mod, params=None, alter_layout=True):
                             with tvm.transform.PassContext(opt_level=3):
                                 mod = alter_layout_seq(mod)
     
-    mod = rewrite_layer_norm(mod)
-    mod = rewrite_gelu_reshape_last(mod, pack_wei=True)
-    # mod = rewrite_dense_bias_reshape_last(mod, pack_wei=True)
+    mod = dnnl.rewrite_layer_norm(mod)
+    mod = dnnl.rewrite_gelu_reshape_last(mod, pack_wei=True)
+    mod = dnnl.rewrite_dense_bias_reshape_last(mod, pack_wei=True)
 
     byoc_seq = tvm.transform.Sequential(
         [
@@ -217,7 +217,7 @@ def partition_for_dnnl(mod, params=None, alter_layout=True):
     )
     with tvm.transform.PassContext(opt_level=3):
         mod = byoc_seq(mod)
-        mod = dnnl.prune_dnnl_subgraphs(mod)
+        # mod = dnnl.prune_dnnl_subgraphs(mod)
     return mod
 
 

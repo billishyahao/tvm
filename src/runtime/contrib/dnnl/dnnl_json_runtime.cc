@@ -163,6 +163,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
 
       // dense prepacked 
       {"NC64n16c", tag::AB16b64a},
+      {"NC", tag::ab},
   };
 
   bool ParsingOpName(const std::string op_name, dnnl::primitive_attr attr) {
@@ -252,7 +253,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
     std::regex conv_pat(".*conv[1-3]d.*");
     std::regex deconv_pat(".*deconv[1-3]d.*");
     std::regex conv_transpose_pat(".*conv[1-3]d_transpose.*");
-    std::regex dense_pack_pat(".*contrib_dense_pack.*");
+    std::regex dense_pack_pat(".*packeddense.*");
     std::regex dense_pat(".*dense.*");
     std::regex max_pool_pat(".*max_pool[1-3]d");
     std::regex avg_pool_pat(".*avg_pool[1-3]d");
@@ -327,6 +328,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
   }
 
   void Convolution(const size_t& nid) {
+    std:: cout << "hebi-dbg: enter Convolution " << ": \n";
     auto node = nodes_[nid];
     auto op_name = node.GetOpName();
     dnnl::primitive_attr attr;
@@ -394,6 +396,25 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
         kernel_layout.insert(0, "G");
       }
     }
+
+    
+    std::cout << "hebi-dbg: src_dims " << ": (";
+    for(auto i : src_dims) {
+      std::cout << i << ", ";
+    }
+    std::cout << "), data_layout: " << data_layout << ". \n";
+
+    std::cout << "hebi-dbg: weights_dims " << ": (";
+    for(auto i : weights_dims) {
+      std::cout << i << ", ";
+    }
+    std::cout << "), kernel_layout: " << kernel_layout << ". \n";
+
+    std::cout << "hebi-dbg: dst_dims " << ": (";
+    for(auto i : dst_dims) {
+      std::cout << i << ", ";
+    }
+    std::cout << ") \n";
 
     // Memory descriptions.
     auto conv_src_md = dnnl::memory::desc(src_dims, dt::f32, layout_dict[data_layout]);
@@ -723,6 +744,7 @@ std::cout << "hebi-dbg: after matmul" << ". \n";
   }
 
   void DensePack(const size_t& nid) {
+    std:: cout << "hebi-dbg: enter DensePack " << ": \n";
     auto node = nodes_[nid];
     auto op_name = node.GetOpName();
     dnnl::primitive_attr attr;
@@ -737,11 +759,30 @@ std::cout << "hebi-dbg: after matmul" << ". \n";
     dnnl::memory::dims out_shape = nodes_[out_entry.id_].GetOpShape()[out_entry.index_];
     dnnl::memory::dim OC = out_shape[1];
 
+    std::cout << "hebi-dbg: input_shape " << ": (";
+    for(auto i : input_shape) {
+      std::cout << i << ", ";
+    }
+    std::cout << "), ";
+
+    std::cout << "hebi-dbg: weight_shape " << ": (";
+    for(auto i : weight_shape) {
+      std::cout << i << ", ";
+    }
+    std::cout << "), ";
+
+    std::cout << "hebi-dbg: out_shape " << ": (";
+    for(auto i : out_shape) {
+      std::cout << i << ", ";
+    }
+    std::cout << ") \n";
+
     std::string weight_layout = node.GetAttr<std::vector<std::string>>("weight_layout")[0];
 
     std::cout << "hebi-dbg: dense pack weight layout: " << weight_layout << ". \n";
 
     if (layout_dict.find(weight_layout) == layout_dict.end()) {
+      std::cout << "hebi-dbg: layout_dict not found \n";
       layout_dict.insert({weight_layout, tag::any});
       LOG(WARNING) << "Unregistered kernel layout for dense pack: " << weight_layout
                    << ", transfer to tag::any";
@@ -749,15 +790,31 @@ std::cout << "hebi-dbg: after matmul" << ". \n";
 
     // Memory shapes.
     dnnl::memory::dims data_dims = input_shape;
-    dnnl::memory::dims weight_dims = weight_shape;
+    dnnl::memory::dims weight_dims = {out_shape[1], input_shape[1]};
     dnnl::memory::dims bias_dims = {OC};
     dnnl::memory::dims out_dims = out_shape;
 
+    std::cout << "hebi-dbg: weight_dims " << ": (";
+    for(auto i : weight_dims) {
+      std::cout << i << ", ";
+    }
+    std::cout << "), ";
+
+    if (layout_dict[weight_layout] == tag::AB16b64a) {
+      std::cout << "weight_layout: tag::AB16b64a \n";
+    }
+
+
     // Memory descriptions.
+    std::cout <<"hebi-dbg: start md \n";
     auto data_md = dnnl::memory::desc({data_dims, dt::f32, tag::nc});
+    std::cout <<"hebi-dbg: data md \n";
     auto weight_md = dnnl::memory::desc({weight_dims, dt::f32, layout_dict[weight_layout]});
+    std::cout <<"hebi-dbg: wei md \n";
     auto bias_md = dnnl::memory::desc({bias_dims, dt::f32, tag::x});
+    std::cout <<"hebi-dbg: bias md \n";
     auto dst_md = dnnl::memory::desc({out_dims, dt::f32, tag::nc});
+    std::cout <<"hebi-dbg: dst md \n";
 
     // Dense description.
     auto dense_desc = dnnl::inner_product_forward::desc(dnnl::prop_kind::forward_inference, data_md,
