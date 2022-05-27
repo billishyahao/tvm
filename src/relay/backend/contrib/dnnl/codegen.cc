@@ -449,6 +449,7 @@ class DNNLJSONSerializer : public backend::contrib::JSONSerializer {
       {"nn.deconv3d", "nn.conv3d_transpose"},
       {"add", "add"},
       {"multiply", "multiply"},
+      {"nn.packeddense", "nn.contrib_dense_pack"},
   };
 
 // dnnl.conv2d_bias
@@ -469,6 +470,8 @@ class DNNLJSONSerializer : public backend::contrib::JSONSerializer {
         op_name.replace(op_name.find("dnnl"), 4, "nn");
         if (op_name.find("deconv") != std::string::npos) {
           op_name = op_map[op_name];
+        } else if (op_name.find("packeddense") != std::string::npos) {
+          op_name = op_map[op_name];
         }
       } else {
         op_name = op_map[op_name];
@@ -486,6 +489,9 @@ class DNNLJSONSerializer : public backend::contrib::JSONSerializer {
   DNNLJSONSerializer(const std::string& symbol, const Expr& expr) : JSONSerializer(symbol, expr) {}
 
   std::vector<JSONGraphNodeEntry> VisitExpr_(const CallNode* cn) override {
+
+    std::cout << "hebi-dbg: enter dnnl json serializer visit \n";
+
     Expr expr = GetRef<Expr>(cn);
     std::string name;
     const CallNode* call = cn;
@@ -517,6 +523,17 @@ class DNNLJSONSerializer : public backend::contrib::JSONSerializer {
         call = GetRootCall(fn->body.as<CallNode>(), op_list.size() - 1, op_list);
         ICHECK(call->op.as<OpNode>()) << "Not op node";
       } else if (name.find("dnnl.dense") != std::string::npos) {
+        std::vector<std::string> op_list = ParsingOpList(name);
+        std::cout << "hebi-dbg: name (" << name << ")";
+        std::cout << "hebi-dbg: op_list (";
+        for (auto s: op_list) {
+          std::cout << s << ", ";
+        }
+        std::cout << ")";
+        //TODO: XXX hebi why 4 here 
+        call = GetRootCall(fn->body.as<CallNode>(), op_list.size() - 1, op_list);
+        ICHECK(call->op.as<OpNode>()) << "Not op node";
+      } else if (name.find("dnnl.packeddense") != std::string::npos) {
         std::vector<std::string> op_list = ParsingOpList(name);
         std::cout << "hebi-dbg: name (" << name << ")";
         std::cout << "hebi-dbg: op_list (";

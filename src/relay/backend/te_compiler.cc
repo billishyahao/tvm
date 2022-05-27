@@ -711,7 +711,10 @@ class LowerTensorExprMutator : public DeviceAwareExprMutator {
     // Note that ResolveToPrimitive will yield non-null only for cases 1-3.
 
     // Look for (possibly indirect) calls to primitives.
+
+    std::cout << "hebi-dbg: DeviceAwareVisitExpr_ enter \n";
     BaseFunc primitive_func = ResolveToPrimitive(call_node->op);
+    std::cout << "hebi-dbg: done resolve to primitive\n";
     if (!primitive_func.defined()) {
       // Not a call to a primitive function we need to rewrite.
       if (const auto* function_node = call_node->op.as<FunctionNode>()) {
@@ -1007,6 +1010,8 @@ void UpdateFunctionMetadata(BaseFunc func,
   Optional<Map<GlobalVar, tir::PrimFunc>> prim_fns =
       func->GetAttr<Map<GlobalVar, tir::PrimFunc>>("prim_funcs");
   CHECK(prim_fns) << "primitive functions not set on Relay function by TECompiler.";
+
+  std::cout << "hebi-dbg: UpdateFunctionMetadata enter \n";
 
   Optional<GlobalVar> prim_fn_var = func->GetAttr<GlobalVar>("prim_fn_var");
   CHECK(prim_fn_var) << "prim_fn_var must be set on Relay functions by TECompiler.";

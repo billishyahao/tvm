@@ -201,6 +201,8 @@ class GraphExecutorCodegen : public backend::MemoizedExprTranslator<std::vector<
   }
 
   LoweredOutput Codegen(IRModule mod, relay::Function func, String mod_name) {
+    std::cout << "hebi-dbg: code gen enter\n";
+    // std::cout << "compiling: ( " << PrettyPrint(func) << " ) \n";
     mod_name_ = mod_name;
     VLOG_CONTEXT << "GraphExecutorCodegen";
     VLOG(1) << "compiling:" << std::endl << PrettyPrint(func);
