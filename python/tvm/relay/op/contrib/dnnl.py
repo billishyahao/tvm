@@ -107,6 +107,7 @@ _register_external_op_helper("nn.softmax")
 ###
 _register_external_op_helper("nn.layer_norm")
 _register_external_op_helper("nn.contrib_dense_pack")
+# _register_external_op_helper("layout_transform")
 ####
 
 
@@ -459,17 +460,19 @@ def tag2layout(input_data, is_weight=False, conv_type="Conv1D"):
             res += i
         else:
             raise ValueError("Unsupport layout format: %s" % input_data)
+    
+    if "Dense" in conv_type:
+        res = "NC64n"
+    # if "Dense" in conv_type:    
+    #     # post process for dense layout 
+    #     # NC16c64n => NC64n16c
+    #     # print("hebi-dbg: pattern res: ", res)
+    #     regexN = '\d+n'
+    #     regexC = '\d+c'
 
-    if "Dense" in conv_type:    
-        # post process for dense layout 
-        # NC16c64n => NC64n16c
-        # print("hebi-dbg: pattern res: ", res)
-        regexN = '\d+n'
-        regexC = '\d+c'
-
-        matchN = re.findall(regexN, res)
-        matchC = re.findall(regexC, res)
-        res =  "NC" + "".join(matchN) + "".join(matchC)
+    #     matchN = re.findall(regexN, res)
+    #     matchC = re.findall(regexC, res)
+    #     res =  "NC" + "".join(matchN) + "".join(matchC)
 
     return res
 
@@ -1011,12 +1014,13 @@ class PackDenseRewrite(DFPatternCallback):
     
         reco_weight_layout = tag2layout(weight_df, is_weight=True, conv_type="Dense")
         
+        # reco_weight_layout = "NC32n123c"
 
-        # print("DenseReshapeBiasRewrite reco_weight_layout = ", reco_weight_layout)
+        print("PackDenseRewrite reco_weight_layout = ", reco_weight_layout)
         weight_transform = relay.layout_transform(weight, "NC", dst_layout=reco_weight_layout)
         #weight_transform = relay.layout_transform(weight, "NC", dst_layout="NC64n16c")
 
-        return relay.op.nn.contrib_dense_pack(data, weight_transform, weight_layout=reco_weight_layout, 
+        return relay.op.nn.contrib_dense_pack(data, weight_transform, weight_layout="NC16c64n", 
                 units=None, out_dtype=self.attr_map["nn.dense"]["out_dtype"] if 'out_dtype' in self.attr_map['nn.dense'] else "")
         
 

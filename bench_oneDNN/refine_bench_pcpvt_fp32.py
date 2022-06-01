@@ -203,7 +203,7 @@ def partition_for_dnnl(mod, params=None, alter_layout=True):
                             with tvm.transform.PassContext(opt_level=3):
                                 mod = alter_layout_seq(mod)
 
-    mod = dnnl.rewrite_layer_norm(mod)
+    # mod = dnnl.rewrite_layer_norm(mod)
     mod = dnnl.rewrite_dense_bias_gelu_reshape_last(mod, pack_wei=True)
     ###### mod = dnnl.rewrite_dense_bias_gelu_reshape_last_v2(mod, tuned_batch_size=1)
     mod = dnnl.rewrite_dense_bias_reshape_last(mod, pack_wei=True)

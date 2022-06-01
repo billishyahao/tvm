@@ -178,7 +178,12 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
 
       // dense prepacked 
       {"NC64n16c", tag::AB16b64a},
+      {"NC16c64n", tag::AB16b64a},
+      {"NC64n", tag::AB16b64a},
+      {"NC32n16c", tag::AB16b32a},
+      {"NC1c1n", tag::AB16b32a},
       {"NC", tag::ab},
+      {"NC32n", tag::AB16b32a},
   };
 
   bool ParsingOpName(const std::string op_name, dnnl::primitive_attr attr) {
@@ -311,6 +316,8 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
           Binary(nid, dnnl::algorithm::binary_mul);
         } else if ("nn.layer_norm" ==  op_name) {
           LayerNorm(nid);
+        } else if ("layout_transform" == op_name) {
+          LayoutTransform(nid);
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
         }
@@ -761,6 +768,68 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
                          {DNNL_ARG_DST, dst_memory}});
   }
 
+  void LayoutTransform(const size_t& nid) {
+    std::cout << "hebi-dbg: enter LayoutTransform " << ": \n";
+
+    auto node = nodes_[nid];
+    auto op_name = node.GetOpName();
+
+    // Setup attributes.
+    auto data_entry = node.GetInputs()[0];    
+    JSONGraphNodeEntry out_entry(nid, 0);
+
+    // Memory shapes.
+    dnnl::memory::dims data_dims = nodes_[data_entry.id_].GetOpShape()[data_entry.index_];
+    dnnl::memory::dims out_dims = nodes_[out_entry.id_].GetOpShape()[out_entry.index_];
+
+     // Memory descriptions.
+    dnnl::memory::desc src_md = GenDNNLMemDescByShape(data_dims, dt::f32);
+    std::string dst_layout = node.GetAttr<std::vector<std::string>>("dst_layout")[0];
+    // std::cout << "hebi-dbg: dst_layout : " << dst_layout << " .\n";
+
+    // std::cout << "hebi-dbg: data_dims " << ": (";
+    // for(auto i : data_dims) {
+    //   std::cout << i << ", ";
+    // }
+    // std::cout << "), ";
+
+
+    // std::cout << "hebi-dbg: out_dims " << ": (";
+    // for(auto i : out_dims) {
+    //   std::cout << i << ", ";
+    // }
+    // std::cout << ") \n";
+
+    out_dims = data_dims;
+
+    // std::cout << "hebi-dbg: after wa out_dims " << ": (";
+    // for(auto i : out_dims) {
+    //   std::cout << i << ", ";
+    // }
+    // std::cout << ") \n";
+    
+    dnnl::memory::desc dst_md = dnnl::memory::desc({out_dims, dt::f32, layout_dict[dst_layout]});
+
+    // std::cout << "hebi-dbg: done dst_md \n";
+
+    // Reorder description
+    dnnl::primitive_attr reorder_attr;
+    auto reorder_prim_desc = dnnl::reorder::primitive_desc(
+            engine_, src_md, engine_, dst_md, reorder_attr);
+
+    auto reorder = dnnl::reorder(reorder_prim_desc);
+    net_.push_back(reorder);
+
+    // Memories.
+    auto data_memory = BindDNNLMemory(data_entry, src_md);
+
+    // Output memory
+    auto dst_memory = BindDNNLMemory(out_entry, reorder_prim_desc.dst_desc());
+    
+    net_args_.push_back({{DNNL_ARG_SRC, data_memory},
+                         {DNNL_ARG_DST, dst_memory}});
+  }
+
   void DensePack(const size_t& nid) {
     // std::cout << "hebi-dbg: enter DensePack " << ": \n";
     auto node = nodes_[nid];
@@ -777,30 +846,30 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
     dnnl::memory::dims out_shape = nodes_[out_entry.id_].GetOpShape()[out_entry.index_];
     dnnl::memory::dim OC = out_shape[1];
 
-    // std::cout << "hebi-dbg: input_shape " << ": (";
-    // for(auto i : input_shape) {
-    //   std::cout << i << ", ";
-    // }
-    // std::cout << "), ";
+    std::cout << "hebi-dbg: input_shape " << ": (";
+    for(auto i : input_shape) {
+      std::cout << i << ", ";
+    }
+    std::cout << "), ";
 
-    // std::cout << "hebi-dbg: weight_shape " << ": (";
-    // for(auto i : weight_shape) {
-    //   std::cout << i << ", ";
-    // }
-    // std::cout << "), ";
+    std::cout << "hebi-dbg: weight_shape " << ": (";
+    for(auto i : weight_shape) {
+      std::cout << i << ", ";
+    }
+    std::cout << "), ";
 
-    // std::cout << "hebi-dbg: out_shape " << ": (";
-    // for(auto i : out_shape) {
-    //   std::cout << i << ", ";
-    // }
-    // std::cout << ") \n";
+    std::cout << "hebi-dbg: out_shape " << ": (";
+    for(auto i : out_shape) {
+      std::cout << i << ", ";
+    }
+    std::cout << ") \n";
 
     std::string weight_layout = node.GetAttr<std::vector<std::string>>("weight_layout")[0];
 
-    // std::cout << "hebi-dbg: dense pack weight layout: " << weight_layout << ". \n";
+    std::cout << "hebi-dbg: dense pack weight layout: " << weight_layout << ". \n";
 
     if (layout_dict.find(weight_layout) == layout_dict.end()) {
-      // std::cout << "hebi-dbg: layout_dict not found \n";
+      std::cout << "hebi-dbg: layout_dict not found \n";
       layout_dict.insert({weight_layout, tag::any});
       LOG(WARNING) << "Unregistered kernel layout for dense pack: " << weight_layout
                    << ", transfer to tag::any";
@@ -812,27 +881,27 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
     dnnl::memory::dims bias_dims = {OC};
     dnnl::memory::dims out_dims = out_shape;
 
-    // std::cout << "hebi-dbg: weight_dims " << ": (";
-    // for(auto i : weight_dims) {
-    //   std::cout << i << ", ";
-    // }
-    // std::cout << "), ";
+    std::cout << "hebi-dbg: weight_dims " << ": (";
+    for(auto i : weight_dims) {
+      std::cout << i << ", ";
+    }
+    std::cout << "), ";
 
-    // if (layout_dict[weight_layout] == tag::AB16b64a) {
-    //   std::cout << "hebi-dbg: weight_layout: tag::AB16b64a \n";
-    // }
+    if (layout_dict[weight_layout] == tag::AB16b64a) {
+      std::cout << "hebi-dbg: weight_layout: tag::AB16b64a \n";
+    }
 
 
     // Memory descriptions.
     // std::cout <<"hebi-dbg: start md \n";
     auto data_md = dnnl::memory::desc({data_dims, dt::f32, tag::nc});
-    // std::cout <<"hebi-dbg: data md \n";
+    std::cout <<"hebi-dbg: data md \n";
     auto weight_md = dnnl::memory::desc({weight_dims, dt::f32, layout_dict[weight_layout]});
-    // std::cout <<"hebi-dbg: wei md \n";
+    std::cout <<"hebi-dbg: wei md \n";
     auto bias_md = dnnl::memory::desc({bias_dims, dt::f32, tag::x});
-    // std::cout <<"hebi-dbg: bias md \n";
+    std::cout <<"hebi-dbg: bias md \n";
     auto dst_md = dnnl::memory::desc({out_dims, dt::f32, tag::nc});
-    // std::cout <<"hebi-dbg: dst md \n";
+    std::cout <<"hebi-dbg: dst md \n";
 
     // Dense description.
     auto dense_desc = dnnl::inner_product_forward::desc(dnnl::prop_kind::forward_inference, data_md,
