@@ -34,6 +34,8 @@ check the attributes of the op and decide if it should be offloaded to DNNL.
 """
 import logging
 
+import re
+
 import tvm.ir
 from tvm import relay
 from tvm.relay import transform
@@ -133,7 +135,7 @@ def make_conv_pattern(conv_name, with_bias=True, with_eltwise=None):
     return conv_out
 
 
-def make_dense_pattern(with_bias=True, with_eltwise=None):
+def make_dense_pattern_helper(dense_op, with_bias=True, with_eltwise=None):
     """Create patterns related to nn.dense.
 
     Parameters
@@ -151,7 +153,7 @@ def make_dense_pattern(with_bias=True, with_eltwise=None):
     weight = wildcard()
     bias = wildcard()
 
-    dense = is_op("nn.dense")(data, weight)
+    dense = is_op(dense_op)(data, weight)
     if with_bias:
         dense_out = is_op("add")(dense, bias)
     else:
@@ -168,6 +170,19 @@ def make_dense_pattern(with_bias=True, with_eltwise=None):
     elif with_eltwise:
         dense_out = is_op(with_eltwise)(dense_out)
     return dense_out
+
+def make_dense_pattern(with_bias=True, with_eltwise=None):
+    """Create patterns related to nn.dense.
+
+    """
+    return make_dense_pattern_helper(dense_op="nn.dense", with_bias=with_bias, with_eltwise=with_eltwise)
+
+
+def make_packed_dense_pattern(with_bias=True, with_eltwise=None):
+    """Create patterns related to nn.dense.
+
+    """
+    return make_dense_pattern_helper(dense_op="nn.contrib_dense_pack", with_bias=with_bias, with_eltwise=with_eltwise)
 
 
 def make_dnnl_pattern(op_name, with_bias, with_eltwise):
@@ -195,10 +210,14 @@ def make_dnnl_pattern(op_name, with_bias, with_eltwise):
         dnnl_pattern = (pat_name, make_conv_pattern(op_name, with_bias, with_eltwise))
     elif op_name == "nn.dense":
         dnnl_pattern = (pat_name, make_dense_pattern(with_bias, with_eltwise))
+    elif op_name == "nn.contrib_dense_pack":
+        pat_name = pat_name.replace("contrib_dense_pack", "packeddense")
+        print("hebi-dbg: pat_name: ", pat_name)
+        dnnl_pattern = (pat_name, make_packed_dense_pattern(with_bias, with_eltwise))
     else:
         logger.warning(
             "Currently, only conv1d, conv2d, conv2d_transpose, conv3d_transpose, "
-            "dense op are supported, but got %s.",
+            "dense and packed dense op are supported, but got %s.",
             op_name,
         )
         dnnl_pattern = ()
@@ -297,6 +316,7 @@ def pattern_table():
                 if elt != "gelu":
                     dnnl_patterns.append(make_dnnl_pattern(conv_name, with_bias, elt))
             dnnl_patterns.append(make_dnnl_pattern("nn.dense", with_bias, elt))
+            dnnl_patterns.append(make_dnnl_pattern("nn.contrib_dense_pack", with_bias, elt))
     return dnnl_patterns
 
 
@@ -369,6 +389,25 @@ def get_optimal_layout_for_conv_transpose(
     )
 
 
+def get_optimal_layout_for_dense(data_layout, weight_shape, out_shape):
+    """Get the optimal layout of dnnl, given shape of dense.
+    Parameters
+    ----------
+    data_layout, weight_shape, out_shape
+        : String
+          Input argument.
+    Returns
+    -------
+    layouts : string
+              The result.
+    """
+    return _ffi_api.get_optimal_layout_for_dense(
+        data_layout,
+        weight_shape,
+        out_shape,
+    )
+
+
 def get_shape(tensor):
     """Get tensor's shape."""
     if isinstance(tensor, relay.expr.Var):
@@ -399,20 +438,23 @@ def get_dtype(tensor):
     raise TypeError("Unsupport data type: %s" % type(tensor))
 
 
-def tag2layout(input_data, is_weight=False, conv_type="Conv1D"):
+def tag2layout(input_data, is_weight=False, op_type="Conv1D"):
     """Transfer layout, denoted with `a, b, c, d, e`,
     into valid layout (NCHW / OIHW) of TVM."""
-    if "Conv1D" in conv_type:
+    if "Conv1D" in op_type:
         data_dic = {"a": "N", "b": "C", "c": "W"}
         weight_dic = {"a": "O", "b": "I", "c": "W", "d": "G"}
-    elif "Conv2D" in conv_type:
+    elif "Conv2D" in op_type:
         data_dic = {"a": "N", "b": "C", "c": "H", "d": "W"}
         weight_dic = {"a": "O", "b": "I", "c": "H", "d": "W"}
         if "e" in input_data:
             weight_dic = {"a": "G", "b": "O", "c": "I", "d": "H", "e": "W"}
-    elif "Conv3D" in conv_type:
+    elif "Conv3D" in op_type:
         data_dic = {"a": "N", "b": "C", "c": "D", "d": "H", "e": "W"}
         weight_dic = {"a": "O", "b": "I", "c": "D", "d": "H", "e": "W", "f": "G"}
+    elif "Dense" in op_type:
+        data_dic = {"a": "N", "b": "C", "c": "H", "d": "W"}
+        weight_dic = data_dic
 
     dic = weight_dic if is_weight else data_dic
     res = ""
@@ -428,6 +470,17 @@ def tag2layout(input_data, is_weight=False, conv_type="Conv1D"):
             res += i
         else:
             raise ValueError("Unsupport layout format: %s" % input_data)
+
+    if "Dense" in op_type:
+        # Post process for dense weight layout
+        # e.g. NC16c64n => NC64n
+        regexN = "\d+n"
+        regexC = "\d+c"
+
+        matchN = re.findall(regexN, res)
+        layout_fmt = "NC" + "".join(matchN)
+        full_layout_fmt = res
+        return ":".join((layout_fmt, full_layout_fmt))
 
     return res
 
@@ -477,9 +530,9 @@ def alter_conv(attrs, inputs, tinfos, out_type):
         dtype,
     )
     src_df, weight_df, dst_df = res.split(",")
-    new_attrs["data_layout"] = tag2layout(src_df, is_weight=False, conv_type=conv_type)
-    new_attrs["kernel_layout"] = tag2layout(weight_df, is_weight=True, conv_type=conv_type)
-    new_attrs["out_layout"] = tag2layout(dst_df, is_weight=False, conv_type=conv_type)
+    new_attrs["data_layout"] = tag2layout(src_df, is_weight=False, op_type=conv_type)
+    new_attrs["kernel_layout"] = tag2layout(weight_df, is_weight=True, op_type=conv_type)
+    new_attrs["out_layout"] = tag2layout(dst_df, is_weight=False, op_type=conv_type)
 
     if conv_type == "Conv1D":
         return relay.nn.conv1d(data, weight, **new_attrs)
@@ -516,15 +569,43 @@ def alter_conv_transpose(attrs, inputs, tinfos, out_type):
         dtype,
     )
     src_df, weight_df, dst_df = res.split(",")
-    new_attrs["data_layout"] = tag2layout(src_df, is_weight=False, conv_type=conv_type)
-    new_attrs["kernel_layout"] = tag2layout(weight_df, is_weight=True, conv_type=conv_type)
-    new_attrs["out_layout"] = tag2layout(dst_df, is_weight=False, conv_type=conv_type)
+    new_attrs["data_layout"] = tag2layout(src_df, is_weight=False, op_type=conv_type)
+    new_attrs["kernel_layout"] = tag2layout(weight_df, is_weight=True, op_type=conv_type)
+    new_attrs["out_layout"] = tag2layout(dst_df, is_weight=False, op_type=conv_type)
 
     if conv_type == "Conv1DTranspose":
         return relay.nn.conv1d_transpose(data, weight, **new_attrs)
     if conv_type == "Conv2DTranspose":
         return relay.nn.conv2d_transpose(data, weight, **new_attrs)
     return relay.nn.conv3d_transpose(data, weight, **new_attrs)
+
+
+def alter_dense(attrs, inputs, tinfos, out_type):
+    """The packed dense's layout auto-query func for dnnl."""
+
+    data, weight = inputs
+
+    weight_shape_list = [str(x) for x in get_shape(weight)]
+    out_shape_list = [str(x) for x in get_shape(out_type)]
+
+    data_shape = ",".join([out_shape_list[0], weight_shape_list[1]])
+    weight_shape = ",".join(weight_shape_list)
+    out_shape = ",".join(out_shape_list)
+
+    res = get_optimal_layout_for_dense(data_shape, weight_shape, out_shape)
+
+    _, weight_df, _ = res.split(",")
+
+    wei_layout, full_wei_layout = tag2layout(weight_df, is_weight=True, op_type="Dense").split(":")
+
+    weight_transform = relay.layout_transform(weight, "NC", dst_layout=wei_layout)
+    return relay.nn.contrib_dense_pack(
+        data,
+        weight_transform,
+        weight_layout=full_wei_layout,
+        units=None,
+        out_dtype=out_type.dtype,
+    )
 
 
 class IsComputeIntensiveGraph(ExprVisitor):
@@ -547,6 +628,7 @@ class IsComputeIntensiveGraph(ExprVisitor):
                 "nn.conv3d_transpose",
                 "nn.dense",
                 "nn.layer_norm",
+                "nn.contrib_dense_pack",
             ]
         )
         if isinstance(call.op, tvm.tir.op.Op):
@@ -710,7 +792,7 @@ class DenseReshapeBiasGeluRewrite(DFPatternCallback):
     8   %83 = multiply(%82, 0.5f /* ty=float32 */) /* ty=Tensor[(1, 3136, 512), float32] */;
     """
 
-    def __init__(self, has_gelu=True):
+    def __init__(self, has_gelu=True, pack_dense=False):
         super(DenseReshapeBiasGeluRewrite, self).__init__()
         self.data = wildcard()
         self.weight = wildcard()
@@ -721,6 +803,7 @@ class DenseReshapeBiasGeluRewrite(DFPatternCallback):
 
         self.attr_map = {}
         self.has_gelu = has_gelu
+        self.pack_dense = pack_dense
 
         den = is_op("nn.dense")(self.data, self.weight)
         re_den = is_op("reshape")(den)
@@ -744,6 +827,11 @@ class DenseReshapeBiasGeluRewrite(DFPatternCallback):
                 for k in expr.attrs.keys():
                     new_attrs[k] = expr.attrs[k]
                 self.attr_map["reshape"] = new_attrs
+            elif isinstance(expr, _expr.Call) and expr.op == relay.op.get("nn.dense"):
+                new_attrs = {}
+                for k in expr.attrs.keys():
+                    new_attrs[k] = expr.attrs[k]
+                self.attr_map["nn.dense"] = new_attrs
 
         _analysis.post_order_visit(pre, visit_func)
 
@@ -754,7 +842,32 @@ class DenseReshapeBiasGeluRewrite(DFPatternCallback):
         weight = node_map[self.weight][0]
         bias = node_map[self.bias][0]
 
-        den = relay.op.nn.dense(data, weight)
+        if self.pack_dense:
+            print("hebi-dbg: self.pack_dense is true")
+            weight_shape_list = [str(x) for x in get_shape(weight)]
+            data_shape_list = [str(x) for x in get_shape(data)]
+
+            data_shape = ",".join(data_shape_list)
+            weight_shape = ",".join(weight_shape_list)
+            out_shape = ",".join([data_shape_list[0], weight_shape_list[0]])
+
+            res = get_optimal_layout_for_dense(data_shape, weight_shape, out_shape)
+
+            _, weight_df, _ = res.split(",")
+            wei_layout, full_wei_layout = tag2layout(weight_df, is_weight=True, op_type="Dense").split(":")
+
+            weight_transform = relay.layout_transform(weight, "NC", dst_layout=wei_layout)
+            den = relay.op.nn.contrib_dense_pack(
+                data,
+                weight_transform,
+                weight_layout=full_wei_layout,
+                units=None,
+                out_dtype=self.attr_map["nn.dense"]["out_dtype"]
+                if "out_dtype" in self.attr_map["nn.dense"]
+                else "",
+            )
+        else:
+            den = relay.op.nn.dense(data, weight)
         added = relay.op.add(bias, den)
         if not self.has_gelu:
             return relay.op.reshape(added, self.attr_map["reshape"]["newshape"])
@@ -778,6 +891,17 @@ def rewrite_dense_bias_gelu_reshape_last(mod):
     """
     mod["main"] = rewrite(
         [DenseReshapeBiasGeluRewrite(), DenseReshapeBiasGeluRewrite(has_gelu=False)], mod["main"]
+    )
+    return mod
+
+
+def rewrite_packed_dense_bias_gelu_reshape_last(mod):
+    """Rewrite the input graph to reorder reshape operators so that
+    we can perform dense_bias_gelu/dense_bias fusion and then offload
+    them to byoc part.
+    """
+    mod["main"] = rewrite(
+        [DenseReshapeBiasGeluRewrite(pack_dense=True), DenseReshapeBiasGeluRewrite(has_gelu=False, pack_dense=True)], mod["main"]
     )
     return mod
 

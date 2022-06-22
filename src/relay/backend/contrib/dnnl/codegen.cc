@@ -472,6 +472,7 @@ class DNNLJSONSerializer : public backend::contrib::JSONSerializer {
       {"sigmoid", "sigmoid"},
       {"nn.deconv2d", "nn.conv2d_transpose"},
       {"nn.deconv3d", "nn.conv3d_transpose"},
+      {"nn.packeddense", "nn.contrib_dense_pack"},
   };
 
   std::vector<std::string> ParsingOpList(const std::string& pattern_name,
@@ -540,6 +541,9 @@ class DNNLJSONSerializer : public backend::contrib::JSONSerializer {
         ICHECK(call->op.as<OpNode>()) << "Not op node";
       } else if (name.find("dnnl.dense") != std::string::npos) {
         call = GetRootCall(fn->body.as<CallNode>(), 10, "nn.dense");
+        ICHECK(call->op.as<OpNode>()) << "Not op node";
+      } else if (name.find("dnnl.packeddense") != std::string::npos) {
+        call = GetRootCall(fn->body.as<CallNode>(), 10, "nn.contrib_dense_pack");
         ICHECK(call->op.as<OpNode>()) << "Not op node";
       } else if (name.find("dnnl.qnn.conv2d") != std::string::npos ||
                  name.find("dnnl.qnn.dense") != std::string::npos) {

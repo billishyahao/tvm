@@ -30,6 +30,7 @@ from tvm.relay.testing.temp_op_attr import TempOpAttr
 from tvm.relay.op.contrib import dnnl
 import tvm.testing
 
+np.random.seed(1)
 
 has_dnnl_codegen = pytest.mark.skipif(
     not tvm.get_global_func("relay.ext.dnnl", True), reason="DNNL codegen not available"
@@ -114,7 +115,10 @@ def partition_for_dnnl(mod, params=None, alter_layout=True, prune_subgraphs=True
                                 mod = alter_layout_seq(mod)
 
     mod = dnnl.rewrite_layer_norm(mod)
-    mod = dnnl.rewrite_dense_bias_gelu_reshape_last(mod)
+    # mod = dnnl.rewrite_dense_bias_gelu_reshape_last(mod)
+    mod = dnnl.rewrite_packed_dense_bias_gelu_reshape_last(mod)
+    print("after packed dense:")
+    print(mod)
     mod = dnnl.legalize_qnn_for_dnnl(mod)
 
     byoc_seq = tvm.transform.Sequential(
@@ -175,7 +179,9 @@ def run_and_verify(mod, input, params, target, run_module, subgraph_num=None, te
         ]
         if test_bf16 and bf16_supported():
             configs += [(True, False, True), (True, True, True)]
-
+        
+        configs = [(False, False, False),
+                    (True, True, False),]
         for use_dnnl, alter_layout, use_bf16 in configs:
             result_key = (
                 mode
@@ -226,6 +232,10 @@ def run_and_verify_func(
         for k, v in input_shapes.items()
         if k not in is_param
     }
+    print("hebi-dbg: input_dict: ")
+    print(input_dict)
+    print("hebi-dbg: params: ")
+    print(params)
     run_and_verify(
         f,
         input_dict,
@@ -644,7 +654,7 @@ def get_dense_bias(
     return out, dic, param_lst
 
 
-def test_dnnl_not_compatible(run_module, target="llvm", dtype="float32"):
+def hebi_dnnl_not_compatible(run_module, target="llvm", dtype="float32"):
     xshape = (1, 32, 14, 14)
     x_data = np.random.uniform(-1, 1, xshape).astype(dtype)
 
@@ -663,7 +673,7 @@ def test_dnnl_not_compatible(run_module, target="llvm", dtype="float32"):
                 results = func(x_data)
 
 
-def test_multiple_outputs(run_module, dtype="float32"):
+def hebi_multiple_outputs(run_module, dtype="float32"):
     def get_graph():
         x = relay.var("x", shape=(1, 3), dtype=dtype)
         y = relay.var("y", shape=(1, 3), dtype=dtype)
@@ -676,7 +686,7 @@ def test_multiple_outputs(run_module, dtype="float32"):
     run_and_verify_func(get_graph(), run_module=run_module, dtype=dtype)
 
 
-def test_elementwise(run_module, dtype="float32"):
+def hebi_elementwise(run_module, dtype="float32"):
     def get_graph(op, x_shape=(1, 8, 3, 3)):
         x = relay.var("x", shape=(x_shape), dtype=dtype)
         out = op(x)
@@ -695,7 +705,7 @@ def test_elementwise(run_module, dtype="float32"):
         run_and_verify_func(get_graph(op), run_module=run_module)
 
 
-def test_clip(run_module, dtype="float32"):
+def hebi_clip(run_module, dtype="float32"):
     def get_graph(x_shape=(1, 8, 3, 3)):
         x = relay.var("x", shape=(x_shape), dtype=dtype)
         out = relay.clip(x, a_min=-0.2, a_max=0.4)
@@ -705,7 +715,7 @@ def test_clip(run_module, dtype="float32"):
     run_and_verify_func(get_graph(), run_module=run_module)
 
 
-def test_leaky_relu(run_module, dtype="float32"):
+def hebi_leaky_relu(run_module, dtype="float32"):
     def get_graph(x_shape=(1, 8, 3, 3)):
         x = relay.var("x", shape=(x_shape), dtype=dtype)
         out = relay.nn.leaky_relu(x, alpha=0.1)
@@ -715,7 +725,7 @@ def test_leaky_relu(run_module, dtype="float32"):
     run_and_verify_func(get_graph(), run_module=run_module)
 
 
-def test_softmax(run_module, dtype="float32"):
+def hebi_softmax(run_module, dtype="float32"):
     def get_graph(x_shape, axis):
         x = relay.var("x", shape=(x_shape), dtype=dtype)
         out = relay.nn.softmax(x, axis=axis)
@@ -728,7 +738,7 @@ def test_softmax(run_module, dtype="float32"):
     run_and_verify_func(get_graph((1, 3, 4), axis=1), run_module=run_module)
 
 
-def test_conv1d(run_module, dtype="float32"):
+def hebi_conv1d(run_module, dtype="float32"):
     conv1d, dic, param_lst = get_conv1d(channels=16, dtype=dtype)
     conv1d = tvm.IRModule.from_expr(conv1d)
     config = conv1d, dic, param_lst
@@ -742,7 +752,7 @@ def test_conv1d(run_module, dtype="float32"):
     run_and_verify_func(config, run_module=run_module, dtype=dtype)
 
 
-def test_conv1d_pattern(run_module, dtype="float32"):
+def hebi_conv1d_pattern(run_module, dtype="float32"):
     x_shape = (1, 3, 224)
     k_shape = (16, 3, 3)
     activation_lst = [None, "relu", "tanh", "sigmoid"]
@@ -758,7 +768,7 @@ def test_conv1d_pattern(run_module, dtype="float32"):
         run_and_verify_func(config, run_module=run_module, dtype=dtype)
 
 
-def test_conv2d(run_module, dtype="float32"):
+def hebi_conv2d(run_module, dtype="float32"):
     x_shape = (1, 32, 8, 8)
     for k_shape, groups in [((16, 32, 3, 3), 1), ((32, 1, 3, 3), 32), ((32, 2, 3, 3), 16)]:
         for padding in [(0, 0), (1, 1)]:
@@ -778,7 +788,7 @@ def test_conv2d(run_module, dtype="float32"):
                     run_and_verify_func(config, run_module=run_module, dtype=dtype)
 
 
-def test_conv2d_weights_const(run_module, dtype="float32"):
+def hebi_conv2d_weights_const(run_module, dtype="float32"):
     x_shape = (1, 32, 8, 8)
     k_shape = (16, 32, 3, 3)
     conv2d, dic, param_lst = get_conv2d_weights_const(x_shape, k_shape, dtype=dtype)
@@ -794,7 +804,7 @@ def test_conv2d_weights_const(run_module, dtype="float32"):
     run_and_verify_func(config, run_module=run_module, dtype=dtype)
 
 
-def test_conv2d_pattern(run_module, dtype="float32"):
+def hebi_conv2d_pattern(run_module, dtype="float32"):
     x_shape = (1, 32, 8, 8)
     k_shape = (16, 32, 3, 3)
     activation_lst = [None, "relu", "tanh", "sigmoid"]
@@ -820,7 +830,7 @@ def test_conv2d_pattern(run_module, dtype="float32"):
     run_and_verify_func(config, run_module=run_module, dtype=dtype)
 
 
-def test_conv2d_transpose(run_module, dtype="float32"):
+def hebi_conv2d_transpose(run_module, dtype="float32"):
     x_shape = (1, 32, 8, 8)
     for k_shape, groups in [((32, 16, 3, 3), 1), ((32, 1, 3, 3), 32), ((32, 4, 3, 3), 16)]:
         for padding in [(0, 0), (1, 1)]:
@@ -838,7 +848,7 @@ def test_conv2d_transpose(run_module, dtype="float32"):
                 run_and_verify_func(config, run_module=run_module, dtype=dtype)
 
 
-def test_conv2d_transpose_pattern(run_module, dtype="float32"):
+def hebi_conv2d_transpose_pattern(run_module, dtype="float32"):
     activation_lst = [None, "relu", "tanh", "sigmoid"]
     for a in activation_lst:
         conv2d, dic, param_lst = get_conv2d_transpose(activation=a, dtype=dtype)
@@ -852,7 +862,7 @@ def test_conv2d_transpose_pattern(run_module, dtype="float32"):
         run_and_verify_func(config, run_module=run_module, dtype=dtype)
 
 
-def test_conv3d(run_module, dtype="float32"):
+def hebi_conv3d(run_module, dtype="float32"):
     conv3d, dic, param_lst = get_conv3d(dtype=dtype)
     conv3d = tvm.IRModule.from_expr(conv3d)
     config = conv3d, dic, param_lst
@@ -871,7 +881,7 @@ def test_conv3d(run_module, dtype="float32"):
     run_and_verify_func(config, run_module=run_module, dtype=dtype)
 
 
-def test_conv3d_pattern(run_module, dtype="float32"):
+def hebi_conv3d_pattern(run_module, dtype="float32"):
     activation_lst = [None, "relu", "tanh", "sigmoid"]
     for a in activation_lst:
         conv3d, dic, param_lst = get_conv3d(activation=a, dtype=dtype)
@@ -885,7 +895,7 @@ def test_conv3d_pattern(run_module, dtype="float32"):
         run_and_verify_func(config, run_module=run_module, dtype=dtype)
 
 
-def test_conv3d_transpose(run_module, dtype="float32"):
+def hebi_conv3d_transpose(run_module, dtype="float32"):
     conv3d_transpose, dic, param_lst = get_conv3d_transpose(dtype=dtype)
     conv3d_transpose = tvm.IRModule.from_expr(conv3d_transpose)
     config = conv3d_transpose, dic, param_lst
@@ -904,7 +914,7 @@ def test_conv3d_transpose(run_module, dtype="float32"):
     run_and_verify_func(config, run_module=run_module, dtype=dtype)
 
 
-def test_conv3d_transpose_pattern(run_module, dtype="float32"):
+def hebi_conv3d_transpose_pattern(run_module, dtype="float32"):
     activation_lst = [None, "relu", "tanh", "sigmoid"]
     for a in activation_lst:
         conv3d, dic, param_lst = get_conv3d_transpose(activation=a, dtype=dtype)
@@ -918,7 +928,7 @@ def test_conv3d_transpose_pattern(run_module, dtype="float32"):
         run_and_verify_func(config, run_module=run_module, dtype=dtype)
 
 
-def test_dense(run_module, dtype="float32"):
+def hebi_dense(run_module, dtype="float32"):
     x_shape = (1, 16)
     k_shape = (32, 16)
 
@@ -938,7 +948,7 @@ def test_dense(run_module, dtype="float32"):
     run_and_verify_func(config, run_module=run_module, dtype=dtype)
 
 
-def test_dense_pattern(run_module, dtype="float32"):
+def hebi_dense_pattern(run_module, dtype="float32"):
     x_shape = (1, 16)
     k_shape = (32, 16)
 
@@ -958,7 +968,7 @@ def test_dense_pattern(run_module, dtype="float32"):
     run_and_verify_func(config, run_module=run_module, dtype=dtype)
 
 
-def test_pool2d(run_module, dtype="float32"):
+def hebi_pool2d(run_module, dtype="float32"):
     def get_graph(
         op,
         x_shape=(1, 3, 32, 32),
@@ -1023,7 +1033,7 @@ def test_pool2d(run_module, dtype="float32"):
                     )
 
 
-def test_pool3d(run_module, dtype="float32"):
+def hebi_pool3d(run_module, dtype="float32"):
     def get_graph(
         op,
         x_shape=(1, 3, 8, 32, 32),
@@ -1063,7 +1073,7 @@ def test_pool3d(run_module, dtype="float32"):
     run_and_verify_func(get_graph(relay.nn.max_pool3d, strides=(1, 1, 1)), run_module=run_module)
 
 
-def test_prune_dnnl_subgraph(run_module):
+def hebi_prune_dnnl_subgraph(run_module):
     """In this test, OP "add" should be offloaded from dnnl codegen."""
 
     def get_graph():
@@ -1095,7 +1105,7 @@ def test_prune_dnnl_subgraph(run_module):
     run_and_verify_func(get_graph(), subgraph_num=1, run_module=run_module, test_bf16=False)
 
 
-def test_layer_norm(run_module, dtype="float32"):
+def hebi_layer_norm(run_module, dtype="float32"):
     x_shape = (1, 49, 64)
 
     ln, dic, param_lst = get_layer_norm(x_shape, dtype=dtype)
@@ -1116,6 +1126,7 @@ def test_rewrite_dense_bias_gelu_reshape_last(run_module, dtype="float32"):
         processed_dense_bias = partition_for_dnnl(
             dense_bias, params=None, alter_layout=False, prune_subgraphs=False
         )
+        print(processed_dense_bias)
         check_dnnl_used(processed_dense_bias, 1)
 
         return dense_bias, dic, param_lst
@@ -1126,6 +1137,7 @@ def test_rewrite_dense_bias_gelu_reshape_last(run_module, dtype="float32"):
     run_and_verify_func(
         get_graph(), subgraph_num=1, run_module=run_module, dtype=dtype, test_bf16=False
     )
+    # assert(False)
 
 
 def permute_shape(shape, l_from="", l_to=""):
@@ -1382,7 +1394,7 @@ qnn_conv_profiles = tvm.testing.parameter(
 
 
 @has_dnnl_codegen
-def test_qnn_conv2d(qnn_conv_profiles):
+def hebi_qnn_conv2d(qnn_conv_profiles):
     def generate_model(p, c, q):
         np.random.seed(0)
 
@@ -1487,7 +1499,7 @@ conv_profiles = tvm.testing.parameter(
 
 
 @has_dnnl_codegen
-def test_conv2d_plus(conv_profiles):
+def hebi_conv2d_plus(conv_profiles):
     def generate_model(p, c):
         np.random.seed(0)
 
@@ -1558,7 +1570,7 @@ qnn_dense_profiles = tvm.testing.parameter(
 
 
 @has_dnnl_codegen
-def test_qnn_dense(qnn_dense_profiles):
+def hebi_qnn_dense(qnn_dense_profiles):
     def generate_model(p, c, q):
         np.random.seed(0)
 
@@ -1630,7 +1642,7 @@ dense_profiles = tvm.testing.parameter(
 
 
 @has_dnnl_codegen
-def test_dense_plus(dense_profiles):
+def hebi_dense_plus(dense_profiles):
     def generate_model(p, c):
         np.random.seed(0)
 

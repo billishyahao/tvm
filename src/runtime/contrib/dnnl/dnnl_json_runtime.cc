@@ -48,6 +48,7 @@ using namespace tvm::runtime;
 using namespace tvm::runtime::json;
 
 class DNNLJSONRuntime : public JSONRuntimeBase {
+
  public:
   DNNLJSONRuntime(const std::string& symbol_name, const std::string& graph_json,
                   const Array<String> const_names)
@@ -83,7 +84,34 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
       // Find proper dnnl::memory buffers
       std::unordered_map<int, dnnl::memory> mem_args;
       for (const auto& kvp : arg_reqs) mem_args[kvp.first] = mem_solver(kvp.second);
+      
       prim.execute(stream_, mem_args);
+
+      // std::cout << "hebi-dbg: Run() after executing:\n";
+      // std::cout << "hebi-dbg: DNNL_ARG_SRC: [\n";
+      // float* src_ptr = static_cast<float*>(mem_args[DNNL_ARG_SRC].get_data_handle());
+      // for(int i=0; i<16; i++) {
+      //   std::cout << src_ptr[i] << ", ";
+      // }
+      // std::cout <<"]\n";
+      // std::cout << "hebi-dbg: DNNL_ARG_WEIGHTS: [\n";
+      // float* wei_ptr = static_cast<float*>(mem_args[DNNL_ARG_WEIGHTS].get_data_handle());
+      // for(int i=0; i<512; i++) {
+      //   std::cout << wei_ptr[i] << ", ";
+      // }
+      // std::cout <<"]\n";
+      // std::cout << "hebi-dbg: DNNL_ARG_BIAS: [\n";
+      // float* bias_ptr = static_cast<float*>(mem_args[DNNL_ARG_BIAS].get_data_handle());
+      // for(int i=0; i<32; i++) {
+      //   std::cout << bias_ptr[i] << ", ";
+      // }
+      // std::cout <<"]\n";
+      // std::cout << "hebi-dbg: DNNL_ARG_DST: [\n";
+      // float* dst_ptr = static_cast<float*>(mem_args[DNNL_ARG_DST].get_data_handle());
+      // for(int i=0; i<32; i++) {
+      //   std::cout << dst_ptr[i] << ", ";
+      // }
+      // std::cout <<"]\n";
     }
   }
 
@@ -121,7 +149,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
     return [io_map](uint32_t eid) -> const DLTensor* { return io_map.at(eid); };
   }
 
- private:
+private:
   const std::map<std::string, dnnl::algorithm> elt_name2algo{
       {"abs", dnnl::algorithm::eltwise_abs},
       {"exp", dnnl::algorithm::eltwise_exp},
@@ -135,6 +163,17 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
       {"sigmoid", dnnl::algorithm::eltwise_logistic},
       {"clip", dnnl::algorithm::eltwise_clip},
       {"gelu_erf", dnnl::algorithm::eltwise_gelu_erf},
+  };
+
+  // TODO(@billishyahao) This is WA. We need to remove it by introducing
+  // more functions in TR.
+  const std::map<std::string, dnnl::memory::format_tag> str2tag{
+      {"AB16b64a", dnnl::memory::format_tag::AB16b64a},
+      {"AB16b32a", dnnl::memory::format_tag::AB16b32a},
+      {"AB16b16a", dnnl::memory::format_tag::AB16b16a},
+      {"NC16c64n", dnnl::memory::format_tag::AB16b64a},
+      {"NC16c32n", dnnl::memory::format_tag::AB16b32a},
+      {"NC16c16n", dnnl::memory::format_tag::AB16b16a},
   };
 
   dnnl::primitive_attr ParseAttrs(const size_t& nid, TensorRequisite* bias_tr) {
@@ -229,6 +268,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
     std::regex dense_pat(".*dense.*");
     std::regex max_pool_pat(".*max_pool[1-3]d");
     std::regex avg_pool_pat(".*avg_pool[1-3]d");
+    std::regex dense_pack_pat(".*packeddense.*");
 
     // Build subgraph engine.
     for (size_t nid = 0; nid < nodes_.size(); ++nid) {
@@ -241,6 +281,8 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
           Deconvolution(nid);
         } else if (std::regex_match(op_name, conv_pat)) {
           Convolution(nid);
+        } else if (std::regex_match(op_name, dense_pack_pat)) {
+          DensePack(nid);
         } else if (std::regex_match(op_name, dense_pat)) {
           Dense(nid);
         } else if ("nn.batch_norm" == op_name) {
@@ -466,6 +508,172 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
             {DNNL_ARG_DST, dst_tr}},
            {sum_in_tr, DNNL_ARG_DST});
   }
+
+  void DensePack(const size_t& nid) {
+    auto node = nodes_[nid];
+
+    // Setup attributes.
+    auto src_tr = GetInput(nid, 0);
+    auto wgh_tr = GetInput(nid, 1);
+    auto dst_tr = GetOutput(nid, 0);
+    auto bias_tr = TensorRequisite{};
+
+    auto attr = ParseAttrs(nid, &bias_tr);
+    attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
+
+    // Assumption that bias is correct and can be squeezed to 1D
+    bias_tr = bias_tr.Reshape({dst_tr.dims()[1]});
+
+    std::string weight_layout = node.GetAttr<std::vector<std::string>>("weight_layout")[0];
+
+    // std::cout << "hebi-dbg: weight_layout: "<< weight_layout << "\n";
+    // src_tr = src_tr.TreatAs("NC");
+    // std::cout << "hebi-dbg: src treat1 \n";
+    // wgh_tr = wgh_tr.TreatAs(weight_layout);
+    // std::cout << "hebi-dbg: wgh treat1 \n";
+    // dst_tr = dst_tr.TreatAs("NC");
+    // std::cout << "hebi-dbg: dst treat1 \n";
+    // bias_tr = bias_tr.TreatAs("X");
+    // std::cout << "hebi-dbg: bias treat1 \n";
+
+
+    // std::cout << "hebi-dbg: wgh_tr.dims: [";
+    // for (auto i : wgh_tr.dims()) {
+    //   std::cout << i << ", ";
+    // }
+    // std::cout <<"]\n";
+
+    dnnl::memory::dims src_dims = src_tr.dims();
+    dnnl::memory::dims dst_dims = dst_tr.dims();
+    dnnl::memory::dims wei_dims = {dst_tr.dims()[1], src_tr.dims()[1]};
+    dnnl::memory::dims bias_dims = bias_tr.dims();
+
+    // dnnl::memory::dims weight_dims = {dst_tr.dims()[1], src_tr.dims()[1]};
+
+    auto src_md = dnnl::memory::desc(src_tr.dims(), src_tr.data_type(), dnnl::memory::format_tag::ab);
+
+    auto weight_md = dnnl::memory::desc({dst_tr.dims()[1], src_tr.dims()[1]}, wgh_tr.data_type(), str2tag.at(weight_layout));
+    // auto weight_md = dnnl::memory::desc(wei_dims, dt::f32, tag::NC16c32n);
+    auto bias_md = dnnl::memory::desc(bias_tr.dims(), bias_tr.data_type(), dnnl::memory::format_tag::a);
+    auto dst_md = dnnl::memory::desc(dst_tr.dims(), dst_tr.data_type(), dnnl::memory::format_tag::ab);
+
+    auto dense_desc = dnnl::inner_product_forward::desc(
+        dnnl::prop_kind::forward_inference, src_md, weight_md,
+        bias_md, dst_md);
+
+    // std::cout << "hebi-dbg: dense_desc initialized done.\n";
+
+
+    // Dense description.
+    // auto dense_desc = dnnl::inner_product_forward::desc(
+    //     dnnl::prop_kind::forward_inference, src_tr.desc(), wgh_tr.desc(),
+    //     bias_tr.desc(), dst_tr.desc());
+    // auto dense_desc = dnnl::inner_product_forward::desc(
+    //     dnnl::prop_kind::forward_inference, src_tr.LayoutAny().desc(), weight_md,
+    //     bias_tr.LayoutAny().desc(), dst_tr.LayoutAny().desc());
+
+    // Enable elementwise post-ops.
+    auto dense_prim_desc = dnnl::inner_product_forward::primitive_desc(dense_desc, attr, engine_);
+
+    // src_tr = src_tr.RequestLayout(dense_prim_desc.src_desc());
+    // wgh_tr = wgh_tr.RequestLayout(dense_prim_desc.weights_desc());
+    // dst_tr = dst_tr.RequestLayout(dense_prim_desc.dst_desc());
+    // bias_tr = bias_tr.RequestLayout(dense_prim_desc.bias_desc());
+
+    auto scratchpad_tr = TensorRequisite::AsIs(dense_prim_desc.scratchpad_desc());
+
+    // TODO(@apeskov): Simulation of inplace primitive. just as PoC.
+    auto sum_in_tr = GetInputByName(nid, "sum_idx");
+
+    Submit(dnnl::inner_product_forward(dense_prim_desc),
+           {{DNNL_ARG_SRC, src_tr},
+            {DNNL_ARG_WEIGHTS, wgh_tr},
+            {DNNL_ARG_BIAS, bias_tr},
+            {DNNL_ARG_SCRATCHPAD, scratchpad_tr},
+            {DNNL_ARG_DST, dst_tr}},
+           {sum_in_tr, DNNL_ARG_DST});
+  }
+
+  // void DensePack(const size_t& nid) {
+  //   auto node = nodes_[nid];
+
+  //   // Setup attributes.
+  //   auto src_tr = GetInput(nid, 0);
+  //   auto wgh_tr = GetInput(nid, 1);
+  //   auto dst_tr = GetOutput(nid, 0);
+  //   auto bias_tr = TensorRequisite{};
+
+  //   auto attr = ParseAttrs(nid, &bias_tr);
+  //   attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
+
+  //   // Assumption that bias is correct and can be squeezed to 1D
+  //   bias_tr = bias_tr.Reshape({dst_tr.dims()[1]});
+
+  //   std::string weight_layout = node.GetAttr<std::vector<std::string>>("weight_layout")[0];
+
+  //   std::cout << "hebi-dbg: weight_layout: "<< weight_layout << "\n";
+  //   // src_tr = src_tr.TreatAs("NC");
+  //   // std::cout << "hebi-dbg: src treat1 \n";
+  //   // wgh_tr = wgh_tr.TreatAs(weight_layout);
+  //   // std::cout << "hebi-dbg: wgh treat1 \n";
+  //   // dst_tr = dst_tr.TreatAs("NC");
+  //   // std::cout << "hebi-dbg: dst treat1 \n";
+  //   // bias_tr = bias_tr.TreatAs("X");
+  //   std::cout << "hebi-dbg: bias treat1 \n";
+
+  //   dnnl::memory::dims src_dims = {1, 16};
+  //   dnnl::memory::dims dst_dims = {1, 32};
+  //   dnnl::memory::dims wei_dims = {32, 16};
+  //   dnnl::memory::dims bias_dims = {32};
+
+  //   // dnnl::memory::dims weight_dims = {dst_tr.dims()[1], src_tr.dims()[1]};
+  //   auto src_md = dnnl::memory::desc(src_dims, dt::f32, tag::ab);
+  //   auto weight_md = dnnl::memory::desc(wei_dims, dt::f32, tag::AB16b32a);
+  //   auto dst_md = dnnl::memory::desc(dst_dims, dt::f32, tag::ab);
+  //   auto bias_md = dnnl::memory::desc(bias_dims, dt::f32, tag::a);
+
+  //   auto dense_desc = dnnl::inner_product_forward::desc(
+  //       dnnl::prop_kind::forward_inference, src_md, weight_md,
+  //       bias_md, dst_md);
+
+  //   std::cout << "hebi-dbg: dense_desc initialized done.\n";
+
+  //   // Dense description.
+  //   // auto dense_desc = dnnl::inner_product_forward::desc(
+  //   //     dnnl::prop_kind::forward_inference, src_tr.desc(), wgh_tr.desc(),
+  //   //     bias_tr.desc(), dst_tr.desc());
+  //   // auto dense_desc = dnnl::inner_product_forward::desc(
+  //   //     dnnl::prop_kind::forward_inference, src_tr.LayoutAny().desc(), weight_md,
+  //   //     bias_tr.LayoutAny().desc(), dst_tr.LayoutAny().desc());
+
+  //   // Enable elementwise post-ops.
+  //   auto dense_prim_desc = dnnl::inner_product_forward::primitive_desc(dense_desc, attr, engine_);
+
+  //   // src_tr = src_tr.RequestLayout(dense_prim_desc.src_desc());
+  //   // wgh_tr = wgh_tr.RequestLayout(dense_prim_desc.weights_desc());
+  //   // dst_tr = dst_tr.RequestLayout(dense_prim_desc.dst_desc());
+  //   // bias_tr = bias_tr.RequestLayout(dense_prim_desc.bias_desc());
+
+  //   auto scratchpad_tr = TensorRequisite::AsIs(dense_prim_desc.scratchpad_desc());
+
+  //   // TODO(@apeskov): Simulation of inplace primitive. just as PoC.
+  //   // auto sum_in_tr = GetInputByName(nid, "sum_idx");
+
+  //   // Submit(dnnl::inner_product_forward(dense_prim_desc),
+  //   //        {{DNNL_ARG_SRC, src_tr},
+  //   //         {DNNL_ARG_WEIGHTS, wgh_tr},
+  //   //         {DNNL_ARG_BIAS, bias_tr},
+  //   //         {DNNL_ARG_SCRATCHPAD, scratchpad_tr},
+  //   //         {DNNL_ARG_DST, dst_tr}},
+  //   //        {sum_in_tr, DNNL_ARG_DST});
+    
+  //   Submit(dnnl::inner_product_forward(dense_prim_desc),
+  //          {{DNNL_ARG_SRC, src_tr},
+  //           {DNNL_ARG_WEIGHTS, wgh_tr},
+  //           {DNNL_ARG_BIAS, bias_tr},
+  //           {DNNL_ARG_SCRATCHPAD, scratchpad_tr},
+  //           {DNNL_ARG_DST, dst_tr}});
+  // }
 
   void BatchNorm(const size_t& nid) {
     auto node = nodes_[nid];

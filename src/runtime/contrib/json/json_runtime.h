@@ -210,6 +210,21 @@ class JSONRuntimeBase : public ModuleNode {
     data_entry_.resize(NumEntries());
   }
 
+  template <typename T>
+  void NDArrayToTIR(tvm::runtime::NDArray arr, std::ostream& os) {
+    int ndim = arr->ndim;
+    int tot_dim = 1;
+    for (int i = 0; i < ndim; i++) {
+      tot_dim *= arr->shape[i];
+    }
+    T* data_ptr = reinterpret_cast<T*>(arr->data);
+    os << "[";
+    for (int i = 0; i < tot_dim; i++) {
+      os << (i != 0 ? ", " : "") << data_ptr[i];
+    }
+  }
+
+
   /*!
    * \brief Set up the constants/weights for inference by binding their DLTensor pointer to
    * the corresponding data entry.
@@ -217,7 +232,10 @@ class JSONRuntimeBase : public ModuleNode {
    * \param consts A list of constant NDArray to be used.
    */
   void SetupConstants(const Array<NDArray>& consts) {
+    // std::cout << "hebi-dbg: setup const: \n";
     for (size_t i = 0; i < consts.size(); ++i) {
+      // NDArrayToTIR<float>(consts[i], std::cout);
+      // std::cout << "] \n";
       data_entry_[EntryID(const_idx_[i], 0)] = consts[i].operator->();
     }
   }
