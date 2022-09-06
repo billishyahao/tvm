@@ -311,6 +311,13 @@ class MixedPrecisionPass : public MixedModeMutator {
 
     Expr cur_op = post_call_node->op;
 
+    if (cur_op.as<GlobalVarNode>() || 
+        cur_op.as<ConstructorNode>() ||
+        cur_op.as<VarNode>()) {
+        std::cout << "hebi-dbg: adt: " << PrettyPrint(cur_op) << "\n";
+    }
+
+
     // TODO(AndrewZhaoLuo): Support ADTs
     // Relay's algebraic data types are not supported yet.
     ICHECK(!cur_op.as<GlobalVarNode>()       // used to declare functions for recursion
@@ -322,12 +329,17 @@ class MixedPrecisionPass : public MixedModeMutator {
     // conversion category (int), accumulation dtype (str), output dtype (str)
     MixedTypeConversionCategory initial_category;
     DataType accumulation_dtype, output_dtype;
+
+    std::cout << "hebi-dbg: processing op: " <<  PrettyPrint(cur_op) << "\n";
+
     if (cur_op.as<FunctionNode>()) {
+      std::cout << "hebi-dbg: cur_op.as<FunctionNode>()\n";
       // Avoid messing with functions to avoid changing signature
       initial_category = MIXED_PRECISION_NEVER;
       accumulation_dtype = DataType::Float(32);
       output_dtype = DataType::Float(32);
     } else if (cur_op.as<OpNode>()) {
+      std::cout << "hebi-dbg: cur_op.as<OpNode>()\n";
       static auto attr_map =
           Op::GetAttrMap<FTVMMixedPrecisionConversionType>("FTVMMixedPrecisionConversionType");
       Op op = Downcast<Op>(cur_op);
@@ -342,9 +354,19 @@ class MixedPrecisionPass : public MixedModeMutator {
 
         int64_t op_conversion_type = Downcast<Integer>(op_descriptor[0])->value;
         initial_category = static_cast<MixedTypeConversionCategory>(op_conversion_type);
+
+        if (initial_category == MIXED_PRECISION_FOLLOW) {
+          std::cout << "hebi-dbg: initial category: MIXED_PRECISION_FOLLOW\n";
+        } else if (initial_category ==  MIXED_PRECISION_NEVER) {
+          std::cout << "hebi-dbg: initial category: MIXED_PRECISION_NEVER\n";
+        } else if (initial_category == MIXED_PRECISION_ALWAYS) {
+          std::cout << "hebi-dbg: initial category: MIXED_PRECISION_ALWAYS\n";
+        }
+
         accumulation_dtype = DataType(String2DLDataType(Downcast<String>(op_descriptor[1])));
         output_dtype = DataType(String2DLDataType(Downcast<String>(op_descriptor[2])));
       } else {
+        std::cout << "hebi-dbg: missing op: " << op->name << "\n";
         missing_ops_[op->name] += 1;
 
         // If not registered, by default assume is a generic FOLLOW operation.
@@ -355,6 +377,8 @@ class MixedPrecisionPass : public MixedModeMutator {
     } else {
       LOG(FATAL) << "Unsupported op type in CallNode: " << pre_call_node->op;
     }
+
+    std::cout << "hebi-dbg: end 1 \n";
 
     // First check if all the new mutated args are in lower precision form
     Array<Type> cur_arg_types;
@@ -382,6 +406,17 @@ class MixedPrecisionPass : public MixedModeMutator {
     // Create the new arguments to the call.
     DataType wanted_arg_dtypes =
         final_category == MIXED_PRECISION_ALWAYS ? mixed_precision_type_ : DataType::Float(32);
+    
+
+    if (final_category == MIXED_PRECISION_FOLLOW) {
+      std::cout << "hebi-dbg: final category: MIXED_PRECISION_FOLLOW\n";
+    } else if (final_category ==  MIXED_PRECISION_NEVER) {
+      std::cout << "hebi-dbg: final category: MIXED_PRECISION_NEVER\n";
+    } else if (final_category == MIXED_PRECISION_ALWAYS) {
+      std::cout << "hebi-dbg: final category: MIXED_PRECISION_ALWAYS\n";
+    }
+    std::cout << "hebi-dbg: end 2 \n";
+
     auto call_args_and_types = CastAllArgs(post_call_node->args, cur_arg_types, wanted_arg_dtypes);
     Array<Expr> new_args = call_args_and_types.first;
     Array<Type> new_arg_types;
@@ -418,6 +453,7 @@ class MixedPrecisionPass : public MixedModeMutator {
   }
 
   Expr Rewrite_(const TupleNode* pre, const Expr& post) {
+    std::cout << "hebi-dbg: rewrite_ 1\n";
     // The old checked type in the expression may not be valid so clear it
     post->checked_type_ = Type(nullptr);
     if (pre == root_ && keep_orig_output_dtype_) {
@@ -445,6 +481,8 @@ class MixedPrecisionPass : public MixedModeMutator {
   }
 
   Expr VisitExpr_(const LetNode* op) final {
+
+    std::cout << "hebi-dbg: visit expr_ 1\n";
     // First convert as much of the bound computation to lower precision as possible
     Expr value = this->Mutate(op->value);
 

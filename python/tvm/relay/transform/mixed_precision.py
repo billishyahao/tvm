@@ -116,6 +116,7 @@ DEFAULT_FOLLOW_LIST = [
     "nn.adaptive_max_pool2d",
     "nn.adaptive_max_pool3d",
     "image.resize2d",
+    # "nn.layer_norm",
 ]
 DEFAULT_NEVER_LIST = [
     # In general if |f(x)| >> |x| for expected inputs then put the op here.

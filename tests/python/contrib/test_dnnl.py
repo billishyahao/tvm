@@ -184,14 +184,23 @@ def run_and_verify(mod, input, params, target, run_module, subgraph_num=None, te
                 + ("_bf16" if use_bf16 else "_fp32")
             )
             processed_mod = mod
+            print("hebi-dbg: before processing:")
+            print(processed_mod)
+            
             if use_bf16:
                 processed_mod = relay.transform.ToMixedPrecision("bfloat16")(processed_mod)
+                
                 if tvm.ir.structural_equal(processed_mod, mod):
                     print("can not convert to bfloat16, skipping...")
                     continue
             if use_dnnl:
                 processed_mod = partition_for_dnnl(processed_mod, params, alter_layout)
                 check_dnnl_used(processed_mod)
+                print(processed_mod)
+                
+            print("hebi-dbg: after processing:")
+            print(processed_mod)
+            
             with tvm.transform.PassContext(opt_level=3):
                 func = relay.create_executor(
                     mode, mod=processed_mod, device=dev, target=target
@@ -600,15 +609,33 @@ def hebi_divide(run_module, dtype="float32"):
     
     
 def test_layernorm(run_module, dtype="float32"):
-    x = relay.var("x", shape=(1, 3136, 64), dtype="bfloat16")
+    x = relay.var("x", shape=(4, 3, 224, 224), dtype="float32")
+    k_shape = (64, 3, 4, 4)
+    kernel = relay.const(np.random.randint(0, 1, k_shape).astype(dtype))
+    out = relay.nn.conv2d(
+        x,
+        kernel,
+        channels=64,
+        kernel_size=k_shape[2:4], 
+        strides=[4, 4],
+        padding=[0, 0, 0, 0]
+    )
+    # bias = relay.var("bias", shape=(64), dtype=dtype)
+    bias = relay.const(np.random.randint(0, 1, (64,)).astype(dtype))
+    out = relay.nn.bias_add(out, bias)
     
-    beta = relay.const(np.zeros((1, 3136, 64)).astype("float32"))
-    gamma = relay.const(np.ones((1, 3136, 64)).astype("float32"))
-    out = relay.nn.layer_norm(x, gamma=gamma, beta=beta)
+    out = relay.reshape(out, newshape=[4, 64, -1])
+    
+    out = relay.transpose(out, axes=[0, 2, 1])
     
     
-    dic = {"x": (1, 3136, 64)}
-    param_lst = []
+    beta = relay.const(np.zeros((64)).astype("float32"))
+    gamma = relay.const(np.ones((64)).astype("float32"))
+    out = relay.nn.layer_norm(out, gamma=gamma, beta=beta)
+    
+    
+    dic = {"x": (4, 3, 224, 224), "kernel": k_shape, "bias": (4, 64, 56, 56)}
+    param_lst = ["kernel", "bias"]
     out = tvm.IRModule.from_expr(out)
     config = out, dic, param_lst
     run_and_verify_func(config, run_module=run_module, dtype=dtype)

@@ -32,6 +32,8 @@
 
 #include <numeric>
 
+#include <cassert>
+
 namespace tvm {
 namespace relay {
 
@@ -105,6 +107,8 @@ bool BroadcastRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
   if (auto* t0 = types[0].as<TensorTypeNode>()) {
     if (auto* t1 = types[1].as<TensorTypeNode>()) {
       if (t0->dtype != t1->dtype) {
+        std::cout << "hebi-dbg: here\n";
+        assert(false);
         reporter->GetDiagCtx().Emit(Diagnostic::Error(t0->span)
                                     << "data types " << t0->dtype << " and " << t1->dtype
                                     << " do not match in BroadcastRel");
@@ -125,6 +129,8 @@ bool BroadcastCompRel(const Array<Type>& types, int num_inputs, const Attrs& att
   if (auto* t0 = types[0].as<TensorTypeNode>()) {
     if (auto* t1 = types[1].as<TensorTypeNode>()) {
       if (t0->dtype != t1->dtype) {
+        std::cout << "hebi-dbg: there\n";
+        assert(false);
         reporter->GetDiagCtx().Emit(Diagnostic::Error(t0->span)
                                     << "data types " << t0->dtype << " and " << t1->dtype
                                     << " do not match in BroadcastCompRel");

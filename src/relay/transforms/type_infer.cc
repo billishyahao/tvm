@@ -935,6 +935,8 @@ Type InferTypeLocal(const Expr& expr) {
   raised. If you know not all populated type fields are correct with the current graph,
   you should use InferType() instead.
   */
+  std::cout << "hebi-dbg: infer type local 1\n";
+  std::cout << PrettyPrint(expr);
   SameTypedSubgraphExtractor subgraph_extractor;
   Expr sub_graph = subgraph_extractor(expr);
 
