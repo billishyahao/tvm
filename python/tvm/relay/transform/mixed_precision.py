@@ -116,6 +116,10 @@ DEFAULT_FOLLOW_LIST = [
     "nn.adaptive_max_pool2d",
     "nn.adaptive_max_pool3d",
     "image.resize2d",
+    "erf",
+    "mean",
+    "variance",
+    "nn.layer_norm",
 ]
 DEFAULT_NEVER_LIST = [
     # In general if |f(x)| >> |x| for expected inputs then put the op here.
@@ -127,7 +131,6 @@ DEFAULT_NEVER_LIST = [
     "nn.l2_normalize",
     # Error function doesn't seem to be able to be lowered into fp16 version in llvm.
     # Move to follow list when it does.
-    "erf",
     # Do not allow arange arguments (begin/end) to be fp16. "end" can be a big fp32 number
     # not representable in fp16.
     "arange",
@@ -137,9 +140,6 @@ DEFAULT_NEVER_LIST = [
     "nn.adaptive_avg_pool2d",
     "nn.adaptive_avg_pool3d",
     "sum",
-    "mean",
-    "variance",
-    "nn.layer_norm",
 ]
 
 # Returns a decorator which registers for every given op, the function under FTVMMixedPrecisionConversionType

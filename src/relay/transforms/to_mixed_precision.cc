@@ -217,7 +217,8 @@ class MixedPrecisionPass : public MixedModeMutator {
     /* Cast tensor to the wanted datatype, returning a cached version if it's already been done. */
 
     // If this is not a floating point type, do not cast. E.g. it might be an integer
-    if (!expr_dtype.is_float()) {
+    // if (!expr_dtype.is_float()) {
+    if (!(expr_dtype.is_float() || expr_dtype.is_bfloat16())) {
       return expr;
     }
 
