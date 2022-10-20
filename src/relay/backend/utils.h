@@ -506,6 +506,7 @@ inline const CallNode* GetRootCall(const CallNode* current_call, const std::stri
  */
 inline const CallNode* GetRootCall(const CallNode* current_call, int max_depth,
                                    const std::string& op_name) {
+  LOG(WARNING) << "hebi-dbg: GetRootCall: " << PrettyPrint(current_call->op) <<", op_name: " << op_name << ", max_depth: " << max_depth;
   ICHECK(current_call && max_depth >= 0);
 
   if (max_depth == 0) {

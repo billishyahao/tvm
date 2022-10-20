@@ -48,7 +48,7 @@ from tvm.relay import expr as _expr
 
 from tvm.relay.expr import Call, TupleGetItem
 from ... import _ffi_api
-from ...dataflow_pattern import wildcard, is_op, is_constant, is_expr, rewrite, DFPatternCallback
+from ...dataflow_pattern import wildcard, is_op, is_constant, is_expr, rewrite, DFPatternCallback, is_var
 from .register import register_pattern_table
 
 
@@ -207,6 +207,51 @@ def make_conv_bias_sum_relu_pattern(conv_type, has_relu=True):
     return out
 
 
+# def make_dense_sum_pattern():
+#     """Create patterns with sum op.
+
+#     Parameters
+#     ----------
+#     conv_type : str
+#         Should be nn.conv1d / nn.conv2d / nn.conv3d.
+#     has_relu : bool
+#         Whether attach relu.
+#     Returns
+#     -------
+#     out : CallPattern
+#         Call node sequence.
+#     """
+#     data1 = wildcard().has_shape([784, 384])
+#     weight = wildcard()
+#     data2 = wildcard().has_shape([1, 784, 192])
+#     dense = is_op("nn.dense")(data1, weight)
+#     out = is_op("add")(dense, data2)
+#     return out
+
+# def make_dense_sum_pattern():
+#     data1 = wildcard().has_shape([784, 384])
+#     weight = wildcard()
+#     data2 = wildcard().has_shape([1, 784, 192])
+#     out = is_op("nn.dense")(data1, weight)
+#     out = is_op("add")(out, data2) # bug.. cannot exchange
+#     return out
+
+def make_dense_sum_pattern(size_list):
+    allout = None
+    for m, k, n in size_list:
+        data1 = wildcard().has_shape([m, k])
+        weight = wildcard()
+        data2 = wildcard()
+        data2 = wildcard().has_shape([1, m, n])
+        out = is_op("nn.dense")(data1, weight)
+        out = is_op("add")(out, data2) # bug.. cannot exchange
+        if allout is None:
+            allout = out
+        else:
+            allout = allout | out
+    return allout
+
+
 def get_op_name(expr):
     """Get the operator name from an expression."""
     if isinstance(expr, Op):
@@ -314,6 +359,7 @@ def make_dense_pattern(with_bias=True, with_eltwise=None):
     data = wildcard()
     weight = wildcard()
     bias = wildcard()
+    # bias = is_constant()
 
     dense = is_op("nn.dense")(data, weight)
     if with_bias:
@@ -435,7 +481,17 @@ def pattern_table():
     dnnl_patterns : List[dnnl_pattern]
         Created patterns.
     """
+    
     dnnl_patterns = list()
+    dnnl_patterns.append(
+        (
+            "dnnl.dense_sum",
+            make_dense_sum_pattern([(784, 384, 192), 
+                                    (196, 768, 384),
+                                    (49, 1536, 768)])
+        )
+    )
+    
     dnnl_patterns.append(make_qnn_conv2d_pattern())
     dnnl_patterns.append(make_qnn_dense_pattern())
     dnnl_patterns.append(

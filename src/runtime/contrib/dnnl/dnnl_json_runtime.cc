@@ -247,6 +247,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
 
   // Build up the engine based on the input graph.
   void BuildEngine() {
+    LOG(WARNING) << "hebi-dbg: BuildEngine ... ";
     engine_ = dnnl::engine(dnnl::engine::kind::cpu, 0);
     stream_ = dnnl::stream(engine_);
 
@@ -266,6 +267,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
       if (node.GetOpType() == "kernel") {
         ICHECK_EQ(node.GetOpType(), "kernel");
         auto op_name = node.GetOpName();
+        LOG(WARNING) << "hebi-dbg: op_name: (" << op_name << ").";
         if (std::regex_match(op_name, deconv_pat) ||
             std::regex_match(op_name, conv_transpose_pat)) {
           Deconvolution(nid);
@@ -296,6 +298,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
         }
       }
     }
+    LOG(WARNING) << "hebi-dbg: end BuildEngine ... ";
   }
 
   void Convolution(const size_t& nid) {
@@ -468,8 +471,18 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
                                                            {DNNL_ARG_DST, dst_tr}});
   }
 
+  void PrintTR(TensorRequisite tr, const std::string& name="") {
+    std::cout << "hebi-dbg: " << name << "_tr.dims = (";
+    for(auto d: tr.dims()) {
+      std::cout << d << ", ";
+    }
+    std::cout << ")\n";
+  }
+
   void Dense(const size_t& nid) {
     auto node = nodes_[nid];
+    auto op_name = nodes_[nid].GetOpName();
+    LOG(WARNING) << "hebi-dbg: Dense name: " << op_name;
 
     // Setup attributes.
     auto src_tr = GetInput(nid, 0);
@@ -477,17 +490,54 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
     auto dst_tr = GetOutput(nid, 0);
     auto bias_tr = TensorRequisite{};
 
+    PrintTR(src_tr, "src");
+    PrintTR(wgh_tr, "wgh");
+    PrintTR(dst_tr, "dst");
+
+    // dst_tr.Reshape({src_tr.dims()[0], wgh_tr.dims()[0]});
+
+    // std::cout << "hebi-dbg: after reshape dst tr...\n";
+    // PrintTR(dst_tr, "dst");
+
+    if (dst_tr.dims().size() > 2) {
+      dst_tr = dst_tr.Squeeze();
+    }
+
+    std::cout << "hebi-dbg: after squeeze dst tr...\n";
+    PrintTR(dst_tr, "dst");
+
+    LOG(WARNING) << "hebi-dbg: Dense 2";
+    
     auto attr = ParseAttrs(nid, &bias_tr);
     attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
+    LOG(WARNING) << "hebi-dbg: Dense 2.1";
 
+
+    PrintTR(bias_tr, "bias");
+    
     // Assumption that bias is correct and can be squeezed to 1D
     bias_tr = bias_tr.Reshape({dst_tr.dims()[1]});
+    // if (bias_tr.dims().size() > 2) {
+    //   bias_tr = bias_tr.Squeeze();
+    // } else {
+    //   bias_tr = bias_tr.Reshape({dst_tr.dims()[1]});
+    // }
 
+    PrintTR(bias_tr, "after_reshape_or_squeeze_bias");
+    
+    LOG(WARNING) << "hebi-dbg: Dense 2.2";
+
+    PrintTR(src_tr.LayoutAny(), "any_src");
+    PrintTR(wgh_tr.LayoutAny(), "any_wgh");
+    PrintTR(bias_tr.LayoutAny(), "any_bias");
+    PrintTR(dst_tr.LayoutAny(), "any_dst");
+    
     // Dense description.
     auto dense_desc = dnnl::inner_product_forward::desc(
         dnnl::prop_kind::forward_inference, src_tr.LayoutAny().desc(), wgh_tr.LayoutAny().desc(),
         bias_tr.LayoutAny().desc(), dst_tr.LayoutAny().desc());
 
+    LOG(WARNING) << "hebi-dbg: Dense 3";
     // Enable elementwise post-ops.
     auto dense_prim_desc = dnnl::inner_product_forward::primitive_desc(dense_desc, attr, engine_);
 
@@ -495,11 +545,20 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
     wgh_tr = wgh_tr.RequestLayout(dense_prim_desc.weights_desc());
     dst_tr = dst_tr.RequestLayout(dense_prim_desc.dst_desc());
     bias_tr = bias_tr.RequestLayout(dense_prim_desc.bias_desc());
+    LOG(WARNING) << "hebi-dbg: Dense 4";
 
     auto scratchpad_tr = TensorRequisite::AsIs(dense_prim_desc.scratchpad_desc());
 
+    LOG(WARNING) << "hebi-dbg: Dense 5";
     // TODO(@apeskov): Simulation of inplace primitive. just as PoC.
     auto sum_in_tr = GetInputByName(nid, "sum_idx");
+    if (op_name.find("_sum") != std::string::npos) {
+       LOG(WARNING) << "hebi-dbg: Dense 6";
+      sum_in_tr = GetInput(nid, node.GetInputs().size() - 1);
+      if (sum_in_tr.dims().size() > 2) {
+        sum_in_tr = sum_in_tr.Squeeze();
+      }
+    }
 
     Submit(dnnl::inner_product_forward(dense_prim_desc),
            {{DNNL_ARG_SRC, src_tr},
@@ -900,6 +959,8 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
       auto dst_arg_id = prim_arg_id.at(inplace_conf.second);
 
       // Register copy action direct before main primitive
+      PrintTR(tr, "tr");
+      PrintTR(dst_tr, "dst");
       dnnl::reorder::primitive_desc io_copy_pd(engine_, tr.desc(), engine_, dst_tr.desc());
       net_.push_back(
           {dnnl::reorder(io_copy_pd), {{DNNL_ARG_SRC, arg_id}, {DNNL_ARG_DST, dst_arg_id}}});
